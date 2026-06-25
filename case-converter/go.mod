@@ -1,11 +1,11 @@
 module case-converter
 
-go 1.24.4
+go 1.25.0
 
 require (
 	common-module v0.0.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/text v0.33.0
+	golang.org/x/text v0.38.0
 )
 
 require (
