@@ -4,7 +4,6 @@
 
 ## Start Here
 
-- Use `/Users/locvotuan/.codex/RTK.md`: prefix shell commands with `rtk`; use `rtk proxy <cmd>` only when exact unfiltered output is required.
 - Prefer `context-mode` MCP for large command output, broad searches, logs, generated analysis, and web fetches. Do not use raw `curl` or `wget`.
 - Prefer Serena symbolic retrieval for Go source structure before broad source-file reads.
 - For repo edits, read current files first and keep changes surgical. Do not revert unrelated user changes.
@@ -31,23 +30,23 @@ For detailed package routing, read `docs/agent/project-map.md`.
 - Build one tool locally without installing:
 
 ```bash
-cd <tool-dir> && rtk go build -o <tool-name> .
+cd <tool-dir> && go build -o <tool-name> .
 ```
 
 - Test one module:
 
 ```bash
-cd <tool-dir> && rtk go test ./...
+cd <tool-dir> && go test ./...
 ```
 
 - Run the focused `api-stress-test` benchmark:
 
 ```bash
-cd api-stress-test && rtk go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
+cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
 ```
 
 - Build or install through `Makefile` only when that is intended. `make` targets move binaries outside the repo: macOS to `$(HOME)/dev-kit/tool`, Linux to `/usr/local/bin`, Windows/MSYS to `D:/dev-kit/tool`.
-- Clean build artifacts with `rtk make clean`. Unix binaries produced inside tool directories are not ignored by `.gitignore`.
+- Clean build artifacts with `make clean`. Unix binaries produced inside tool directories are not ignored by `.gitignore`.
 
 For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs/agent/workflows.md`.
 
@@ -66,7 +65,7 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 ## Conventions And Guardrails
 
 - Go version target is Go 1.24. Keep dependencies minimal; Cobra is the CLI framework used across tools.
-- Use standard Go formatting. Run `rtk gofmt` or `rtk gofmt -w` only on files you intentionally changed.
+- Use standard Go formatting. Run `gofmt` or `gofmt -w` only on files you intentionally changed.
 - Error handling should use contextual `fmt.Errorf("...: %w", err)` where wrapping helps callers.
 - Preserve CLI flag names and existing public behavior unless the user explicitly asks for a breaking change.
 - File safety matters: keep binary detection, UTF-8 validation, backup restore paths, and temp-file rename behavior intact.

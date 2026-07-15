@@ -30,15 +30,15 @@ The other tools currently have no test files:
 
 | Change area | Minimum check |
 | --- | --- |
-| `api-stress-test/cmd/` | `cd api-stress-test && rtk go test ./cmd ./internal/...` |
-| `api-stress-test/internal/request/` | `cd api-stress-test && rtk go test ./internal/request` |
-| `api-stress-test/internal/stats/` | `cd api-stress-test && rtk go test ./internal/stats` |
-| `api-stress-test` stats performance | `cd api-stress-test && rtk go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem` |
-| `api-stress-test/internal/ui/` | `cd api-stress-test && rtk go test ./internal/ui` |
-| `find-everything/internal/ui/` | `cd find-everything && rtk go test ./internal/ui` |
-| Any module-wide change | `cd <tool-dir> && rtk go test ./...` |
+| `api-stress-test/cmd/` | `cd api-stress-test && go test ./cmd ./internal/...` |
+| `api-stress-test/internal/request/` | `cd api-stress-test && go test ./internal/request` |
+| `api-stress-test/internal/stats/` | `cd api-stress-test && go test ./internal/stats` |
+| `api-stress-test` stats performance | `cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem` |
+| `api-stress-test/internal/ui/` | `cd api-stress-test && go test ./internal/ui` |
+| `find-everything/internal/ui/` | `cd find-everything && go test ./internal/ui` |
+| Any module-wide change | `cd <tool-dir> && go test ./...` |
 | `common-module/utils/` | Test/build each importing consumer: `case-converter`, `check-folder-size`, `find-everything` |
-| Docs-only change | `rtk git diff --check` plus path/link checks |
+| Docs-only change | `git diff --check` plus path/link checks |
 
 ## Gaps To Consider
 

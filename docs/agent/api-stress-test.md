@@ -46,21 +46,21 @@ Preserve existing flag names and defaults unless the user explicitly requests a 
 Run unit tests for any `api-stress-test` change:
 
 ```bash
-cd api-stress-test && rtk go test ./...
+cd api-stress-test && go test ./...
 ```
 
 For stats or contention-sensitive changes, add the benchmark:
 
 ```bash
-cd api-stress-test && rtk go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
+cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
 ```
 
 Use package-specific tests for narrow changes:
 
 ```bash
-cd api-stress-test && rtk go test ./internal/request
-cd api-stress-test && rtk go test ./internal/ui
-cd api-stress-test && rtk go test ./cmd
+cd api-stress-test && go test ./internal/request
+cd api-stress-test && go test ./internal/ui
+cd api-stress-test && go test ./cmd
 ```
 
 ## Output Contracts
