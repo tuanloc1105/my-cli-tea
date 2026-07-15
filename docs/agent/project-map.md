@@ -19,7 +19,7 @@ Use this file when a task needs exact source routing. `CLAUDE.md` stays the conc
 | `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/scanner.go`, `internal/ui/printer.go` |
 | `find-content/` | CLI plus search helper | Text search and directory listing | `main.go`, `searcher.go` |
 | `find-everything/` | Modular Cobra CLI | File finding and filtering | `cmd/root.go`, `internal/finder/finder.go`, `internal/finder/walker.go`, `internal/ui/display.go` |
-| `replace-text/` | Single-file CLI | Find/replace with safety checks | `main.go` |
+| `replace-text/` | Modular Cobra CLI | Streaming find/replace with concurrent traversal and mutation safety | `cmd/root.go`, `internal/replacer/types.go`, `internal/replacer/processor.go`, `internal/replacer/stream.go`, `internal/replacer/metadata.go` |
 | `common-module/` | Shared module | Utility helpers | `utils/struct_utils.go`, `utils/system_command_executor.go` |
 
 ## Shared Module Usage
@@ -47,7 +47,7 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `find-everything/internal/ui/display.go`
 - `case-converter/main.go`
 - `find-content/main.go` and `find-content/searcher.go`
-- `replace-text/main.go`
+- `replace-text/cmd/root.go`
 
 `README.md` is the main user-facing documentation surface for examples and installation notes.
 
@@ -55,7 +55,8 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 - `api-stress-test/cmd/root.go` creates HTTP client/transport behavior, proxy/TLS/redirect/keepalive options, worker fan-out, duration mode, warmup, and output-file handling.
 - `api-stress-test/internal/request/client.go` handles headers, form data, JSON/raw/file body input, `http.NewRequestWithContext`, response draining, expected status/body checks, and error normalization.
-- `replace-text/main.go` is the only general user-file mutation path. It handles binary checks, UTF-8 validation, `.bak` backups, permission preservation, temp files, restore paths, and `filepath.WalkDir`.
+- `replace-text/cmd/root.go` owns flags, argument handling, user-facing output, and exit codes.
+- `replace-text/internal/replacer/processor.go`, `stream.go`, and `metadata*.go` own traversal/concurrency, streaming UTF-8 replacement and size limits, backup/atomic commits, concurrent-change checks, and platform metadata preservation.
 - `find-content/searcher.go`, `find-everything/internal/finder/`, and `check-folder-size/internal/scanner/scanner.go` are the main filesystem traversal/read paths.
 - `find-everything/internal/ui/display.go` can save large result sets to a file.
 
@@ -64,4 +65,4 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
 - No CI/CD configs, container files, deploy scripts, env templates, or release automation are present.
-- `.gitignore` ignores `*.exe` and `.serena/` only. Unix binaries built into tool directories are not ignored.
+- Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.

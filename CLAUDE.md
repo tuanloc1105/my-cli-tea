@@ -20,7 +20,7 @@ This is a collection of six standalone Go CLI tools plus one shared module. Each
 | `check-folder-size/` | Directory size analyzer with terminal and JSON output.                                                 | `check-folder-size/cmd/root.go`, `check-folder-size/internal/scanner/scanner.go` |
 | `find-content/`      | Text search CLI with regex/plain, multiline, filtering, and listing modes.                             | `find-content/main.go`, `find-content/searcher.go`                               |
 | `find-everything/`   | File finder with pattern, size, type, progress, and large-result handling.                             | `find-everything/cmd/root.go`, `find-everything/internal/finder/finder.go`       |
-| `replace-text/`      | Find/replace CLI with binary checks, optional backups, and atomic writes.                              | `replace-text/main.go`                                                             |
+| `replace-text/`      | Streaming find/replace CLI with backups, dry-run, size limits, metadata preservation, and atomic writes. | `replace-text/cmd/root.go`, `replace-text/internal/replacer/`                    |
 | `common-module/`     | Shared utilities used by `case-converter`, `check-folder-size`, and `find-everything`.           | `common-module/utils/`                                                             |
 
 For detailed package routing, read `docs/agent/project-map.md`.
@@ -57,7 +57,8 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 - Changing `api-stress-test` HTTP behavior: read `api-stress-test/cmd/root.go`, `api-stress-test/internal/request/client.go`, and `api-stress-test/internal/request/ratelimiter.go`.
 - Changing `api-stress-test` metrics, percentiles, histograms, throughput, or high-concurrency behavior: read `api-stress-test/internal/stats/collector.go` and `docs/agent/api-stress-test.md`.
 - Changing filesystem traversal/search: read `check-folder-size/internal/scanner/scanner.go`, `find-content/searcher.go`, or `find-everything/internal/finder/` as appropriate.
-- Changing file mutation safety: read `replace-text/main.go` first.
+- Changing `replace-text` flags, validation, output, or exit behavior: read `replace-text/cmd/root.go` and `replace-text/cmd/root_test.go`.
+- Changing `replace-text` traversal, streaming, size limits, backup/atomic-write behavior, or metadata preservation: read `replace-text/internal/replacer/processor.go`, `replace-text/internal/replacer/stream.go`, `replace-text/internal/replacer/metadata.go`, and their matching tests first.
 - Changing shared utilities: read `common-module/utils/`, then build/test every consumer that imports `common-module/utils`.
 - Changing tests or verification strategy: read `docs/agent/testing.md`.
 - Changing build/install behavior: read `Makefile` and `docs/agent/workflows.md`.

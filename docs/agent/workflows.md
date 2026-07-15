@@ -92,6 +92,11 @@ bash -lc 'for d in api-stress-test case-converter check-folder-size common-modul
 - `api-stress-test/internal/request/` request behavior: `cd api-stress-test && go test ./internal/request`
 - `api-stress-test/internal/ui/` output/progress behavior: `cd api-stress-test && go test ./internal/ui`
 - `find-everything/internal/ui/` large-result behavior: `cd find-everything && go test ./internal/ui`
+- `replace-text/cmd/` flags, validation, output, or exit behavior: `cd replace-text && go test ./cmd`
+- `replace-text/internal/replacer/` streaming, metadata, backup/rollback, cancellation, or worker behavior: `cd replace-text && go test ./internal/replacer`
+- `replace-text/` concurrency or transactional commit changes: add `cd replace-text && go test -race ./...`
+- `replace-text/` streaming matcher changes: add `cd replace-text && go test ./internal/replacer -run '^$' -fuzz '^FuzzStreamReplace$' -fuzztime=10s`
+- `replace-text/` platform metadata or build-tag changes: cross-build affected targets to `/tmp`, for example `cd replace-text && CGO_ENABLED=0 GOOS=<darwin|linux|windows> GOARCH=amd64 go build -trimpath -o /tmp/replace-text-<os>-amd64 .`
 - `common-module/utils/` changes: test/build the three consumers that import it: `case-converter`, `check-folder-size`, and `find-everything`.
 
 ## Docs Checks

@@ -17,7 +17,7 @@ Search for text content within files using regex or plain text matching. Support
 Advanced file and directory finder with pattern matching, size filtering, and parallel processing for large directory trees.
 
 ### 5. **Replace Text** (`replace-text/`)
-Find and replace text in files or directories with automatic backup creation and support for multi-line replacements.
+Find and replace UTF-8 text in files or directories with optional backups, dry-run analysis, and bounded-memory streaming.
 
 ### 6. **API Stress Test** (`api-stress-test/`)
 HTTP load and stress testing tool for APIs with performance metrics collection.
@@ -161,13 +161,15 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
 
 ### Replace Text
 
-**Purpose:** Find and replace text in files with automatic backup creation.
+**Purpose:** Find and replace UTF-8 text in files and directory trees with explicit safety and resource limits.
 
 **Key Features:**
 - File and directory processing
-- Automatic backup creation (.bak files)
-- Multi-line replacement support
-- Escape sequence handling
+- Optional `.bak` creation with `--backup` (backups are not created by default)
+- Multi-line replacement with `\n`, `\r`, `\t`, and `\\` auto-unescaping
+- Literal and dry-run modes
+- Bounded worker concurrency and streaming input/output limits
+- Exact no-match and policy-skip reasons for a single target
 
 **Usage:**
 ```bash
@@ -179,7 +181,33 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
 
 # Handle escape sequences
 ./replace-text "\\n" "\\r\\n" file.txt
+
+# Preserve backslashes instead of interpreting escape sequences
+./replace-text --literal "\\n" "line break" file.txt
+
+# Count replacements without changing files or creating backups
+./replace-text --dry-run "old text" "new text" /path/to/directory
+
+# Create a backup only for files that are modified
+./replace-text --backup "old text" "new text" file.txt
+
+# Separate flags from text that starts with a dash
+./replace-text -- "--old" "--new" file.txt
 ```
+
+**Flags:**
+- `--backup`: create a `.bak` copy for each modified file; disabled by default.
+- `--max-size <bytes>`: maximum input size per file; defaults to 512 MiB (`536870912` bytes).
+- `--literal`: do not interpret `\n`, `\r`, `\t`, or `\\` in the two text arguments.
+- `--dry-run`: analyze and count replacements without creating temp files, backups, or metadata changes.
+- `--max-workers <count>`: maximum concurrent file workers; defaults to `min(runtime.NumCPU(), 8)` and must be at least `1`.
+- `--max-output-size <bytes>`: maximum output size per file; `0` (the default) means unlimited and negative values are usage errors.
+
+**Output and exit status:** A modified file keeps the compatibility line `Successfully replaced text in '<path>'.`. A single no-match or policy skip prints its exact human-readable reason. Directory runs retain per-file success/error lines, finish with `Finished processing directory '<path>'.`, and print fixed-order summary counters plus a fixed-order skip breakdown. Usage errors, operational errors, and partial directory failures return `1`; no-match and policy skips return `0`.
+
+**Streaming and limits:** Replacement uses a two-pass streaming pipeline rather than loading the entire file. Per-worker memory is bounded by `O(max(64 KiB, len(old-text)))`, and recursive traversal uses bounded channels instead of collecting every path or result. Files that exceed the input or projected-output policy limit are left unchanged and reported as skips. Only valid UTF-8 regular files with one hard link are modified; NUL/binary data, invalid UTF-8, symlinks, hardlinks, and non-regular entries are skipped with a reason.
+
+**Platform and metadata limitations:** On macOS and Linux, the tool preserves supported mode, ownership, access time, and modification time or aborts before commit when required preservation cannot be completed. Windows mode/time handling is best-effort, and owner SID preservation is not guaranteed. ACLs, extended attributes, resource forks, Linux capabilities and SELinux labels, sparse/reflink layout, and birth time are not preserved. Replacement rename is described as atomic only on macOS/Linux local filesystems; Windows, network, and removable filesystems are best-effort. Linux and Windows runtime semantics must be verified on real target machines or runners before release; cross-compilation alone verifies only that the code builds.
 
 ## 🎯 Use Cases
 
@@ -195,7 +223,7 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
 
 ### File Management
 - **Find Everything:** Organize files by type, size, or pattern
-- **Replace Text:** Batch file modifications with safety backups
+- **Replace Text:** Batch file modifications with optional safety backups
 - **Check Folder Size:** Clean up disk space efficiently
 
 ## 🔧 Development
