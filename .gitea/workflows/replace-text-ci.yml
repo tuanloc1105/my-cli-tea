@@ -1,0 +1,83 @@
+name: replace-text CI
+
+on:
+  push:
+    paths:
+      - "replace-text/**"
+      - ".gitea/workflows/replace-text-ci.yml"
+  pull_request:
+    paths:
+      - "replace-text/**"
+      - ".gitea/workflows/replace-text-ci.yml"
+  workflow_dispatch:
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: linux
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: replace-text
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -trimpath ./...
+
+  macos:
+    name: macOS
+    runs-on: macos
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: replace-text
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -trimpath ./...
+
+  windows:
+    name: Windows
+    runs-on: windows
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+        working-directory: replace-text
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -trimpath ./...

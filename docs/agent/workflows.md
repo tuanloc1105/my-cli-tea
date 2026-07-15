@@ -2,6 +2,24 @@
 
 Run Go commands from an individual module unless the command explicitly loops over modules.
 
+## Gitea Actions CI
+
+`.gitea/workflows/replace-text-ci.yml` verifies `replace-text` on pushes, pull requests, and manual runs when the workflow or `replace-text/**` changes. Each platform job installs Go 1.24.4, then runs:
+
+```bash
+go test ./...
+go vet ./...
+go build -trimpath ./...
+```
+
+The workflow requires host-mode Gitea Actions runners registered with these labels:
+
+- `linux:host`
+- `macos:host`
+- `windows:host`
+
+The value before `:host` is the workflow's `runs-on` label. The Windows job explicitly uses PowerShell; without all three matching runners, the corresponding jobs remain queued.
+
 ## Local Build
 
 Build one module without installing:
