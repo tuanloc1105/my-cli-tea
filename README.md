@@ -147,23 +147,24 @@ interrupted immediately.
 
 **Key Features:**
 - Regex and plain text search
-- Multiple file type support
-- Directory exclusions
-- Line number display
+- Deterministic bounded-concurrency output and exact result caps
+- Hidden-entry, binary, symlink, and special-file policies
+- Normal streaming and bounded multiline search
+- Directory listing with OS-aware hidden detection
 
 **Usage:**
 ```bash
 # Search for text
-./find-content "search term" /path/to/search
+./find-content /path/to/search "search term"
 
 # Use regex
-./find-content -regex "pattern.*" /path/to/search
+./find-content --regex /path/to/search "pattern.*"
 
-# Show line numbers
-./find-content -line-nums "term" /path/to/search
+# Search only selected extensions
+./find-content --extensions go,md /path/to/search "term"
 
-# Case insensitive
-./find-content -case-insensitive "term" /path/to/search
+# List a directory, including hidden entries
+./find-content --list --show-hidden /path/to/search
 ```
 
 ### Find Everything
@@ -319,10 +320,10 @@ All tools use:
 ### Content Search
 ```bash
 # Find all TODO comments
-./find-content "TODO" /path/to/project
+./find-content /path/to/project "TODO"
 
 # Search for specific function usage
-./find-content -case-insensitive "getUser" /path/to/code
+./find-content --regex /path/to/code 'get(User|Account)'
 ```
 
 ### File Discovery

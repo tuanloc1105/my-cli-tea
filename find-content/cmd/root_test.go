@@ -12,456 +12,287 @@ import (
 	"testing"
 )
 
-func TestCommandHelpAndFlags(t *testing.T) {
-	code, stdout, stderr := runCommand(t, []string{"--help"}, func(
-		context.Context,
-		string,
-		string,
-		commandOptions,
-		io.Writer,
-		io.Writer,
-	) error {
-		t.Fatal("runner should not be called for help")
+func TestCommandHelpAndFreshState(t *testing.T) {
+	code, stdout, stderr := runCommand(t, []string{"--help"}, func(context.Context, []string, commandOptions, io.Writer, io.Writer) error {
+		t.Fatal("runner called for help")
 		return nil
 	})
-
 	if code != 0 || stderr != "" {
-		t.Fatalf("exit code = %d, stderr = %q", code, stderr)
+		t.Fatalf("exit/stderr = %d/%q", code, stderr)
 	}
 	for _, required := range []string{
-		"Usage:",
-		"find-content [directory] [keyword]",
-		"--case-sensitive",
-		"--exclude-dirs",
-		"--exclude-files",
-		"--max-results",
-		"--show-hidden",
-		"--suppress-warnings",
+		"Usage:", "--no-default-excludes", "--max-workers", "--max-line-size",
+		"--max-multiline-size", "--show-hidden", "exit code 1", "exit code 2",
 	} {
 		if !strings.Contains(stdout, required) {
 			t.Errorf("help is missing %q:\n%s", required, stdout)
 		}
 	}
 
-	root := newRootCommand(nil, io.Discard, io.Discard)
-	flagNames := []string{
-		"all",
-		"case-sensitive",
-		"exclude-dirs",
-		"exclude-files",
-		"extensions",
-		"list",
-		"max-results",
-		"multiline",
-		"no-file-path",
-		"no-line-numbers",
-		"regex",
-		"show-hidden",
-		"suppress-warnings",
+	var received []commandOptions
+	run := func(_ context.Context, _ []string, options commandOptions, _ io.Writer, _ io.Writer) error {
+		received = append(received, options)
+		return nil
 	}
-	if len(flagNames) != 13 {
-		t.Fatalf("test contract has %d flags, want 13", len(flagNames))
+	firstCode, _, firstErr := runCommand(t, []string{"--regex", "--max-workers=2", "root", "word"}, run)
+	secondCode, _, secondErr := runCommand(t, []string{"root", "word"}, run)
+	if firstCode != 0 || secondCode != 0 || firstErr != "" || secondErr != "" {
+		t.Fatalf("codes/stderr = %d/%d/%q/%q", firstCode, secondCode, firstErr, secondErr)
 	}
-	for _, name := range flagNames {
-		if root.Flags().Lookup(name) == nil {
-			t.Errorf("root command is missing --%s", name)
-		}
+	if len(received) != 2 || !received[0].useRegex || received[0].maxWorkers != 2 {
+		t.Fatalf("received options = %+v", received)
+	}
+	defaults := defaultCommandOptions()
+	if received[1] != defaults {
+		t.Fatalf("second invocation leaked state: %+v, want %+v", received[1], defaults)
 	}
 }
 
-func TestCommandRequiresExactlyTwoArguments(t *testing.T) {
-	originalArgs := os.Args
-	os.Args = []string{"host-process", "--host-only"}
-	t.Cleanup(func() { os.Args = originalArgs })
-
+func TestCommandArgumentAndValidationErrorsExitTwo(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{name: "no arguments", want: "accepts 2 arg(s)"},
-		{name: "list still needs keyword", args: []string{"--list", "directory"}, want: "accepts 2 arg(s)"},
-		{name: "too many arguments", args: []string{"directory", "keyword", "extra"}, want: "accepts 2 arg(s)"},
-		{name: "unknown flag", args: []string{"--unknown", "directory", "keyword"}, want: "unknown flag"},
+		{name: "missing args", want: "accepts 2 arg(s)"},
+		{name: "empty keyword", args: []string{"root", ""}, want: "keyword must not be empty"},
+		{name: "negative results", args: []string{"--max-results=-1", "root", "word"}, want: "must not be negative"},
+		{name: "zero workers", args: []string{"--max-workers=0", "root", "word"}, want: "at least 1"},
+		{name: "zero line size", args: []string{"--max-line-size=0", "root", "word"}, want: "greater than 0"},
+		{name: "zero multiline size", args: []string{"--max-multiline-size=0", "root", "word"}, want: "greater than 0"},
+		{name: "all with extensions", args: []string{"--all", "--extensions=txt", "root", "word"}, want: "cannot be used"},
+		{name: "list search flag", args: []string{"--list", "--regex", "root"}, want: "cannot be used with --list"},
+		{name: "list suppress warnings", args: []string{"--list", "--suppress-warnings", "root"}, want: "cannot be used with --list"},
+		{name: "show hidden in search", args: []string{"--show-hidden", "root", "word"}, want: "only be used with --list"},
+		{name: "unknown flag", args: []string{"--unknown", "root", "word"}, want: "unknown flag"},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			code, stdout, stderr := runCommand(t, test.args, func(
-				context.Context,
-				string,
-				string,
-				commandOptions,
-				io.Writer,
-				io.Writer,
-			) error {
+			code, stdout, stderr := runCommand(t, test.args, func(context.Context, []string, commandOptions, io.Writer, io.Writer) error {
 				calls++
 				return nil
 			})
-
-			if code != 1 {
-				t.Fatalf("exit code = %d, want 1", code)
+			if code != 2 || stdout != "" || !strings.Contains(stderr, test.want) {
+				t.Fatalf("exit/stdout/stderr = %d/%q/%q, want code 2 and %q", code, stdout, stderr, test.want)
 			}
-			if stdout != "" || !strings.Contains(stderr, test.want) {
-				t.Fatalf("stdout/stderr = %q/%q, want empty/substring %q", stdout, stderr, test.want)
-			}
-			if strings.Count(stderr, "Error:") != 1 || strings.Contains(stderr, "Usage:") {
-				t.Fatalf("error should be rendered once without usage: %q", stderr)
-			}
-			if calls != 0 {
-				t.Fatalf("runner called %d times", calls)
+			if calls != 0 || strings.Count(stderr, "Error:") != 1 || strings.Contains(stderr, "Usage:") {
+				t.Fatalf("invalid error routing: calls=%d stderr=%q", calls, stderr)
 			}
 		})
 	}
 }
 
-func TestCommandForwardsAllFlags(t *testing.T) {
-	var received commandOptions
-	var directory, keyword string
+func TestCommandForwardsArgumentsOptionsAndStreams(t *testing.T) {
+	var gotArgs []string
+	var gotOptions commandOptions
 	code, stdout, stderr := runCommand(t, []string{
-		"--regex",
-		"--case-sensitive",
-		"--multiline",
-		"--extensions", "go, txt",
-		"--exclude-dirs", "vendor, node_modules",
-		"--exclude-files", "skip.go, other.go",
-		"--no-line-numbers",
-		"--no-file-path",
-		"--max-results", "7",
-		"--list",
-		"--show-hidden",
-		"--suppress-warnings",
-		"--all",
-		"fixture-dir",
-		"needle",
-	}, func(
-		_ context.Context,
-		gotDirectory string,
-		gotKeyword string,
-		options commandOptions,
-		stdout io.Writer,
-		stderr io.Writer,
-	) error {
-		directory = gotDirectory
-		keyword = gotKeyword
-		received = options
-		fmt.Fprint(stdout, "stdout")
-		fmt.Fprint(stderr, "stderr")
+		"--regex", "--case-sensitive", "--multiline", "--extensions=go, txt",
+		"--exclude-dirs=vendor", "--exclude-files=skip.go", "--no-default-excludes",
+		"--no-line-numbers", "--no-file-path", "--max-results=7", "--max-workers=2",
+		"--max-line-size=99", "--max-multiline-size=101", "--suppress-warnings",
+		"fixture", "needle",
+	}, func(_ context.Context, args []string, options commandOptions, stdout, stderr io.Writer) error {
+		gotArgs = append([]string(nil), args...)
+		gotOptions = options
+		fmt.Fprint(stdout, "out")
+		fmt.Fprint(stderr, "err")
 		return nil
 	})
-
-	if code != 0 || stdout != "stdout" || stderr != "stderr" {
+	if code != 0 || stdout != "out" || stderr != "err" {
 		t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
 	}
-	if directory != "fixture-dir" || keyword != "needle" {
-		t.Fatalf("directory/keyword = %q/%q", directory, keyword)
-	}
-	want := commandOptions{
-		useRegex:         true,
-		caseSensitive:    true,
-		multiline:        true,
-		extensions:       "go, txt",
-		excludeDirs:      "vendor, node_modules",
-		excludeFiles:     "skip.go, other.go",
-		noLineNumbers:    true,
-		noFilePath:       true,
-		maxResults:       7,
-		listMode:         true,
-		showHidden:       true,
-		suppressWarnings: true,
-		searchAll:        true,
-	}
-	if received != want {
-		t.Fatalf("options = %+v, want %+v", received, want)
+	if strings.Join(gotArgs, ",") != "fixture,needle" || !gotOptions.useRegex || !gotOptions.caseSensitive || !gotOptions.multiline || gotOptions.maxWorkers != 2 || gotOptions.maxLineSize != 99 || gotOptions.maxMultilineSize != 101 {
+		t.Fatalf("args/options = %v/%+v", gotArgs, gotOptions)
 	}
 }
 
-func TestCommandStateDoesNotLeakBetweenInvocations(t *testing.T) {
-	var received []commandOptions
-	run := func(
-		_ context.Context,
-		_ string,
-		_ string,
-		options commandOptions,
-		_ io.Writer,
-		_ io.Writer,
-	) error {
-		received = append(received, options)
-		return nil
+func TestListRejectsEverySearchOnlyFlag(t *testing.T) {
+	flags := [][]string{
+		{"--regex"},
+		{"--case-sensitive"},
+		{"--multiline"},
+		{"--extensions=txt"},
+		{"--exclude-dirs=skip"},
+		{"--exclude-files=skip.txt"},
+		{"--no-default-excludes"},
+		{"--no-line-numbers"},
+		{"--no-file-path"},
+		{"--max-results=1"},
+		{"--max-workers=1"},
+		{"--max-line-size=1"},
+		{"--max-multiline-size=1"},
+		{"--all"},
+		{"--suppress-warnings"},
 	}
-
-	firstCode, _, firstStderr := runCommand(t, []string{
-		"--regex", "--extensions", "go", "--max-results", "3", "first", "needle",
-	}, run)
-	secondCode, _, secondStderr := runCommand(t, []string{"second", "needle"}, run)
-	if firstCode != 0 || secondCode != 0 || firstStderr != "" || secondStderr != "" {
-		t.Fatalf("codes/stderr = %d/%d/%q/%q", firstCode, secondCode, firstStderr, secondStderr)
-	}
-	if len(received) != 2 {
-		t.Fatalf("runner calls = %d, want 2", len(received))
-	}
-	if !received[0].useRegex || received[0].extensions != "go" || received[0].maxResults != 3 {
-		t.Fatalf("first options = %+v", received[0])
-	}
-	if received[1] != (commandOptions{}) {
-		t.Fatalf("second invocation inherited state: %+v", received[1])
-	}
-}
-
-func TestCommandRoutesStreamsAndRendersRunnerErrorOnce(t *testing.T) {
-	code, stdout, stderr := runCommand(t, []string{"directory", "keyword"}, func(
-		context.Context,
-		string,
-		string,
-		commandOptions,
-		io.Writer,
-		io.Writer,
-	) error {
-		return errors.New("boom")
-	})
-
-	if code != 1 || stdout != "" || stderr != "Error: boom\n" {
-		t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
-	}
-	if strings.Count(stderr, "Error:") != 1 {
-		t.Fatalf("error rendered more than once: %q", stderr)
-	}
-}
-
-func TestCommandContextAndNilStreams(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	var stdout, stderr bytes.Buffer
-	code := executeContext(ctx, []string{"directory", "keyword"}, &stdout, &stderr, func(
-		ctx context.Context,
-		_ string,
-		_ string,
-		_ commandOptions,
-		_ io.Writer,
-		_ io.Writer,
-	) error {
-		return ctx.Err()
-	})
-	if code != 1 || stdout.Len() != 0 || stderr.String() != "Error: context canceled\n" {
-		t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout.String(), stderr.String())
-	}
-
-	called := false
-	code = executeContext(nil, []string{"directory", "keyword"}, nil, nil, func(
-		ctx context.Context,
-		_ string,
-		_ string,
-		_ commandOptions,
-		stdout io.Writer,
-		stderr io.Writer,
-	) error {
-		called = true
-		if ctx == nil {
-			t.Fatal("nil context reached runner")
-		}
-		fmt.Fprint(stdout, "discarded stdout")
-		fmt.Fprint(stderr, "discarded stderr")
-		return nil
-	})
-	if code != 0 || !called {
-		t.Fatalf("exit/called = %d/%v", code, called)
-	}
-}
-
-func TestExecuteContextSearchFormattingAndModes(t *testing.T) {
-	fixture := newSearchFixture(t)
-
-	t.Run("plain", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{
-			"--extensions", "go",
-			"--no-file-path",
-			"--no-line-numbers",
-			fixture.root,
-			"needle",
-		})
-		if code != 0 || stderr != "" || stdout != "beta needle\n\nFound 1 match(es)\n" {
-			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
-		}
-	})
-
-	t.Run("regex", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{
-			"--regex",
-			"--case-sensitive",
-			"--extensions", "txt",
-			"--exclude-dirs", "sub",
-			fixture.root,
-			"^Alpha needle$",
-		})
-		want := fmt.Sprintf("%s:1:Alpha needle\n\nFound 1 match(es)\n", fixture.textFile)
-		if code != 0 || stderr != "" || stdout != want {
-			t.Fatalf("exit/stdout/stderr = %d/%q/%q, want 0/%q/empty", code, stdout, stderr, want)
-		}
-	})
-
-	t.Run("multiline", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{
-			"--multiline",
-			"--extensions", "txt",
-			"--exclude-dirs", "sub",
-			"--no-file-path",
-			fixture.root,
-			`multi start\nmulti end`,
-		})
-		want := "3..4:multi start\\nmulti end\n\nFound 1 match(es)\n"
-		if code != 0 || stderr != "" || stdout != want {
-			t.Fatalf("exit/stdout/stderr = %d/%q/%q, want 0/%q/empty", code, stdout, stderr, want)
-		}
-	})
-}
-
-func TestExecuteContextFiltersAndUnlimitedMaxResults(t *testing.T) {
-	fixture := newSearchFixture(t)
-
-	for _, maxResults := range []string{"0", "-1"} {
-		t.Run("max-results "+maxResults, func(t *testing.T) {
-			code, stdout, stderr := runIntegration(t, []string{
-				"--extensions", "txt",
-				"--exclude-dirs", "sub",
-				"--no-file-path",
-				"--no-line-numbers",
-				"--max-results=" + maxResults,
-				fixture.root,
-				"needle",
+	for _, flag := range flags {
+		t.Run(flag[0], func(t *testing.T) {
+			args := append([]string{"--list"}, flag...)
+			args = append(args, "root")
+			code, stdout, stderr := runCommand(t, args, func(context.Context, []string, commandOptions, io.Writer, io.Writer) error {
+				t.Fatal("runner called for incompatible list flag")
+				return nil
 			})
-			if code != 0 || stderr != "" || !strings.Contains(stdout, "Found 2 match(es)") {
+			if code != 2 || stdout != "" || !strings.Contains(stderr, "cannot be used with --list") {
 				t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
 			}
-			for _, line := range []string{"Alpha needle\n", "second needle\n"} {
-				if !strings.Contains(stdout, line) {
-					t.Fatalf("stdout is missing %q: %q", line, stdout)
-				}
-			}
 		})
 	}
+}
 
-	t.Run("comma values are not trimmed", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{
-			"--extensions", "txt, go",
-			"--exclude-dirs", "sub",
-			"--no-file-path",
-			"--no-line-numbers",
-			fixture.root,
-			"needle",
-		})
-		if code != 0 || stderr != "" || !strings.Contains(stdout, "Found 2 match(es)") {
-			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
-		}
-		if strings.Contains(stdout, "beta needle") {
-			t.Fatalf("raw split unexpectedly trimmed the second extension: %q", stdout)
+func TestExecuteContextSearchExitCodesAndFormatting(t *testing.T) {
+	fixture := newSearchFixture(t)
+
+	t.Run("match", func(t *testing.T) {
+		code, stdout, stderr := runIntegration([]string{"--extensions=txt", "--exclude-dirs=sub,.hidden", "--exclude-files=.hidden.txt", fixture.root, "needle"})
+		want := fmt.Sprintf("%s:1:Alpha needle\n%s:2:second needle\n\nFound 2 match(es)\n", fixture.textFile, fixture.textFile)
+		if code != 0 || stdout != want || stderr != "" {
+			t.Fatalf("exit/stdout/stderr = %d/%q/%q, want 0/%q/empty", code, stdout, stderr, want)
 		}
 	})
 
-	t.Run("excluded file", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{
-			"--extensions", "txt",
-			"--exclude-dirs", "sub",
-			"--exclude-files", filepath.Base(fixture.textFile),
-			fixture.root,
-			"needle",
+	t.Run("clean no match", func(t *testing.T) {
+		code, stdout, stderr := runIntegration([]string{fixture.root, "absent"})
+		if code != 1 || stdout != "No matches found\n" || stderr != "" {
+			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("invalid regex", func(t *testing.T) {
+		code, stdout, stderr := runIntegration([]string{"--regex", fixture.root, "["})
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "Error: invalid search pattern:") {
+			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("missing root", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "missing")
+		code, stdout, stderr := runIntegration([]string{missing, "needle"})
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "inspect root") {
+			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("keyword begins with dash", func(t *testing.T) {
+		code, stdout, stderr := runIntegration([]string{"--no-file-path", "--no-line-numbers", fixture.root, "--", "--token"})
+		if code != 0 || !strings.Contains(stdout, "literal --token") || stderr != "" {
+			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("multiline range", func(t *testing.T) {
+		code, stdout, stderr := runIntegration([]string{
+			"--multiline", "--extensions=txt", "--exclude-dirs=sub,.hidden", "--exclude-files=.hidden.txt",
+			"--no-file-path", fixture.root, `multi start\nmulti end`,
 		})
-		if code != 0 || stderr != "" || stdout != "No matches found\n" {
+		if code != 0 || stdout != "3..4:multi start\\nmulti end\n\nFound 1 match(es)\n" || stderr != "" {
 			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
 		}
 	})
 }
 
-func TestExecuteContextSearchErrorPolicies(t *testing.T) {
+func TestExecuteContextHiddenListAndLegacySyntax(t *testing.T) {
 	fixture := newSearchFixture(t)
 
-	t.Run("no match", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{fixture.root, "absent"})
-		if code != 0 || stdout != "No matches found\n" || stderr != "" {
-			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
-		}
-	})
-
-	t.Run("invalid regex remains successful", func(t *testing.T) {
-		code, stdout, stderr := runIntegration(t, []string{"--regex", fixture.root, "["})
-		if code != 0 || stdout != "No matches found\n" {
-			t.Fatalf("exit/stdout = %d/%q", code, stdout)
-		}
-		if !strings.Contains(stderr, "Error: Invalid regex pattern:") || strings.Count(stderr, "Error:") != 1 {
-			t.Fatalf("stderr = %q", stderr)
-		}
-	})
-
-	t.Run("missing search directory remains successful", func(t *testing.T) {
-		missing := filepath.Join(t.TempDir(), "missing")
-		code, stdout, stderr := runIntegration(t, []string{missing, "needle"})
-		if code != 0 || stdout != "No matches found\n" {
-			t.Fatalf("exit/stdout = %d/%q", code, stdout)
-		}
-		want := fmt.Sprintf("Error: Directory does not exist: %s\n", missing)
-		if stderr != want {
-			t.Fatalf("stderr = %q, want %q", stderr, want)
-		}
-	})
-
-	t.Run("missing search directory warning can be suppressed", func(t *testing.T) {
-		missing := filepath.Join(t.TempDir(), "missing")
-		code, stdout, stderr := runIntegration(t, []string{"--suppress-warnings", missing, "needle"})
-		if code != 0 || stdout != "No matches found\n" || stderr != "" {
-			t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
-		}
-	})
-}
-
-func TestExecuteContextListModeAndFailure(t *testing.T) {
-	fixture := newSearchFixture(t)
-
-	code, stdout, stderr := runIntegration(t, []string{"--list", fixture.root, "unused"})
-	if code != 0 || stderr != "" {
-		t.Fatalf("exit code = %d, stderr = %q", code, stderr)
-	}
-	for _, visible := range []string{filepath.Base(fixture.textFile), filepath.Base(fixture.goFile), "sub"} {
-		if !strings.Contains(stdout, visible) {
-			t.Errorf("listing is missing %q: %q", visible, stdout)
-		}
-	}
-	if strings.Contains(stdout, ".hidden.txt") {
-		t.Fatalf("hidden file was listed without --show-hidden: %q", stdout)
+	code, stdout, stderr := runIntegration([]string{"--no-file-path", "--no-line-numbers", fixture.root, "hidden needle"})
+	if code != 0 || stdout != "hidden needle\nhidden needle\n\nFound 2 match(es)\n" || stderr != "" {
+		t.Fatalf("hidden search = %d/%q/%q", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runIntegration(t, []string{"--list", "--show-hidden", fixture.root, "unused"})
+	code, stdout, stderr = runIntegration([]string{"--list", fixture.root})
+	if code != 0 || stderr != "" || strings.Contains(stdout, ".hidden.txt") || !strings.Contains(stdout, "a.txt") {
+		t.Fatalf("canonical list = %d/%q/%q", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runIntegration([]string{"--list", "--show-hidden", fixture.root})
 	if code != 0 || stderr != "" || !strings.Contains(stdout, ".hidden.txt") {
-		t.Fatalf("show-hidden exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+		t.Fatalf("show hidden list = %d/%q/%q", code, stdout, stderr)
 	}
 
-	missing := filepath.Join(t.TempDir(), "missing")
-	code, stdout, stderr = runIntegration(t, []string{"--list", missing, "unused"})
-	if code != 1 || stdout != "" {
-		t.Fatalf("list failure exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
-	}
-	if !strings.Contains(stderr, missing) || strings.Count(stderr, "Error:") != 1 || strings.Contains(stderr, "Usage:") {
-		t.Fatalf("list error should be rendered once without usage: %q", stderr)
+	code, _, stderr = runIntegration([]string{"--list", fixture.root, "unused"})
+	if code != 0 || stderr != "Warning: the two-argument --list form is deprecated; use find-content --list <directory>\n" {
+		t.Fatalf("legacy list = %d/%q", code, stderr)
 	}
 }
+
+func TestExecuteContextMaxResultsNormalizationAndBinaryPolicy(t *testing.T) {
+	fixture := newSearchFixture(t)
+	code, stdout, stderr := runIntegration([]string{
+		"--extensions", " txt, txt, ,go ", "--no-file-path", "--no-line-numbers",
+		"--exclude-dirs=.hidden", "--exclude-files=.hidden.txt",
+		"--max-results=2", fixture.root, "needle",
+	})
+	if code != 0 || stderr != "" || stdout != "Alpha needle\nsecond needle\n\nFound 2 match(es)\n" {
+		t.Fatalf("normalized exact cap = %d/%q/%q", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runIntegration([]string{"--all", fixture.root, "binary needle"})
+	if code != 1 || stdout != "No matches found\n" || stderr != "" {
+		t.Fatalf("binary policy = %d/%q/%q", code, stdout, stderr)
+	}
+}
+
+func TestExecuteContextPartialErrorsAndSuppression(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "a.txt"), "1234567\nneedle\n")
+
+	for _, suppress := range []bool{false, true} {
+		args := []string{"--max-line-size=6", "--no-file-path", "--no-line-numbers", root, "needle"}
+		if suppress {
+			args = append([]string{"--suppress-warnings"}, args...)
+		}
+		code, stdout, stderr := runIntegration(args)
+		if code != 2 || stdout != "needle\n\nFound 1 match(es)\n" || !strings.Contains(stderr, "Error: search incomplete: 1 diagnostic(s)") {
+			t.Fatalf("suppress=%v exit/stdout/stderr = %d/%q/%q", suppress, code, stdout, stderr)
+		}
+		if suppress == strings.Contains(stderr, "Warning:") {
+			t.Fatalf("suppress=%v warning routing = %q", suppress, stderr)
+		}
+		if strings.Contains(stdout, "No matches found") {
+			t.Fatalf("partial search printed clean no-match: %q", stdout)
+		}
+	}
+}
+
+func TestExecuteContextWriterAndContextErrorsExitTwo(t *testing.T) {
+	fixture := newSearchFixture(t)
+	var stderr bytes.Buffer
+	code := ExecuteContext(context.Background(), []string{fixture.root, "needle"}, failingWriter{}, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "emit search result") {
+		t.Fatalf("writer failure = %d/%q", code, stderr.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout bytes.Buffer
+	stderr.Reset()
+	code = ExecuteContext(ctx, []string{fixture.root, "needle"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "context canceled") {
+		t.Fatalf("context failure = %d/%q/%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 type searchFixture struct {
 	root     string
 	textFile string
-	goFile   string
 }
 
 func newSearchFixture(t *testing.T) searchFixture {
 	t.Helper()
 	root := t.TempDir()
 	textFile := filepath.Join(root, "a.txt")
-	goFile := filepath.Join(root, "b.go")
-	writeTestFile(t, textFile, "Alpha needle\nsecond needle\nmulti start\nmulti end\n")
-	writeTestFile(t, goFile, "beta needle\n")
-	writeTestFile(t, filepath.Join(root, ".hidden.txt"), "hidden without target\n")
+	writeTestFile(t, textFile, "Alpha needle\nsecond needle\nmulti start\nmulti end\nliteral --token\n")
+	writeTestFile(t, filepath.Join(root, "b.go"), "beta needle\n")
+	writeTestFile(t, filepath.Join(root, ".hidden.txt"), "hidden needle\n")
+	writeTestFile(t, filepath.Join(root, ".hidden", "nested.txt"), "hidden needle\n")
 	writeTestFile(t, filepath.Join(root, "sub", "nested.txt"), "nested needle\n")
 	writeTestFile(t, filepath.Join(root, "node_modules", "dependency.txt"), "dependency needle\n")
-	return searchFixture{root: root, textFile: textFile, goFile: goFile}
+	writeTestFile(t, filepath.Join(root, "binary.bin"), "binary needle\x00tail")
+	return searchFixture{root: root, textFile: textFile}
 }
 
 func writeTestFile(t *testing.T, path, content string) {
@@ -481,8 +312,7 @@ func runCommand(t *testing.T, args []string, run runner) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-func runIntegration(t *testing.T, args []string) (int, string, string) {
-	t.Helper()
+func runIntegration(args []string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := ExecuteContext(context.Background(), args, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()

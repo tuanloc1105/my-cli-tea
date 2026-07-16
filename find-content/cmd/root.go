@@ -2,33 +2,24 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/spf13/cobra"
+
+	"find-content/internal/searcher"
 )
 
-type runner func(context.Context, string, string, commandOptions, io.Writer, io.Writer) error
+type runner func(context.Context, []string, commandOptions, io.Writer, io.Writer) error
 
-type commandOptions struct {
-	useRegex         bool
-	caseSensitive    bool
-	multiline        bool
-	extensions       string
-	excludeDirs      string
-	excludeFiles     string
-	noLineNumbers    bool
-	noFilePath       bool
-	maxResults       int
-	listMode         bool
-	showHidden       bool
-	suppressWarnings bool
-	searchAll        bool
+type exitError struct {
+	code    int
+	message string
 }
 
-// ExecuteContext runs find-content with the supplied process arguments and
-// streams. It returns the process exit code without terminating the caller.
+func (e *exitError) Error() string { return e.message }
+
 func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return executeContext(ctx, args, stdout, stderr, runSearch)
 }
@@ -50,108 +41,143 @@ func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	root := newRootCommand(run, stdout, stderr)
 	root.SetArgs(args)
 	if err := root.ExecuteContext(ctx); err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
-		return 1
+		code := 2
+		var status *exitError
+		if errors.As(err, &status) {
+			code = status.code
+		}
+		if err.Error() != "" {
+			_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
+		}
+		return code
 	}
 	return 0
 }
 
 func newRootCommand(run runner, stdout, stderr io.Writer) *cobra.Command {
-	options := commandOptions{}
-
+	options := defaultCommandOptions()
 	root := &cobra.Command{
 		Use:   "find-content [directory] [keyword]",
-		Short: "Improved file content search utility",
-		Long: `A powerful file content search utility that supports recursive search with various options.
+		Short: "Search text files recursively with deterministic output",
+		Long: `Search regular text files recursively without following symlinks.
 
-Examples:
-  find-content /path/to/search "keyword"
+Search includes hidden entries. List mode hides hidden entries unless
+--show-hidden is set. Clean searches with no matches return exit code 1;
+usage, validation, root, writer, and partial-search errors return exit code 2.`,
+		Example: `  find-content /path/to/search "keyword"
   find-content /path/to/search "pattern" --regex
   find-content /path/to/search "text" --extensions py,js,txt
-  find-content /path/to/search "version" --case-sensitive
-  find-content /path/to/search "error" --exclude-dirs node_modules,.git
-  find-content /path/to/search "line1\nline2\nline3" --multiline`,
-		Args:          cobra.ExactArgs(2),
+  find-content --list /path/to/search
+  find-content /path/to/search -- "--keyword"`,
+		Args: func(command *cobra.Command, args []string) error {
+			if options.listMode {
+				if len(args) == 1 || len(args) == 2 {
+					return nil
+				}
+				return fmt.Errorf("--list accepts 1 arg(s), or 2 in the deprecated legacy form")
+			}
+			return cobra.ExactArgs(2)(command, args)
+		},
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd.Context(), args[0], args[1], options, stdout, stderr)
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateModeFlags(command, options); err != nil {
+				return err
+			}
+			if err := validateOptions(options); err != nil {
+				return err
+			}
+			if !options.listMode && args[1] == "" {
+				return errors.New("keyword must not be empty")
+			}
+			return run(command.Context(), args, options, stdout, stderr)
 		},
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 
 	flags := root.Flags()
-	flags.BoolVarP(&options.useRegex, "regex", "r", false, "Treat keyword as regex pattern")
-	flags.BoolVarP(&options.caseSensitive, "case-sensitive", "c", false, "Case sensitive search")
-	flags.BoolVarP(&options.multiline, "multiline", "M", false, "Enable multiline search with \\n in keyword")
-	flags.StringVarP(&options.extensions, "extensions", "e", "", "Comma-separated list of file extensions to search")
-	flags.StringVar(&options.excludeDirs, "exclude-dirs", "", "Comma-separated list of directories to exclude")
-	flags.StringVar(&options.excludeFiles, "exclude-files", "", "Comma-separated list of files to exclude")
+	flags.BoolVarP(&options.useRegex, "regex", "r", false, "Treat keyword as a regular expression")
+	flags.BoolVarP(&options.caseSensitive, "case-sensitive", "c", false, "Use case-sensitive matching")
+	flags.BoolVarP(&options.multiline, "multiline", "M", false, "Allow matches across lines; \\n in the keyword means newline")
+	flags.StringVarP(&options.extensions, "extensions", "e", "", "Comma-separated authoritative file extensions")
+	flags.StringVar(&options.excludeDirs, "exclude-dirs", "", "Comma-separated directory basenames to exclude")
+	flags.StringVar(&options.excludeFiles, "exclude-files", "", "Comma-separated file basenames to exclude")
+	flags.BoolVar(&options.noDefaultExclude, "no-default-excludes", false, "Disable built-in directory excludes")
 	flags.BoolVar(&options.noLineNumbers, "no-line-numbers", false, "Hide line numbers in output")
 	flags.BoolVar(&options.noFilePath, "no-file-path", false, "Hide file paths in output")
-	flags.IntVarP(&options.maxResults, "max-results", "m", 0, "Maximum number of results to show")
-	flags.BoolVarP(&options.listMode, "list", "l", false, "List directory contents instead of searching")
-	flags.BoolVar(&options.showHidden, "show-hidden", false, "Show hidden files when listing")
-	flags.BoolVar(&options.suppressWarnings, "suppress-warnings", false, "Suppress warning messages")
-	flags.BoolVar(&options.searchAll, "all", false, "Search in all files (not limited by extension)")
-
+	flags.IntVarP(&options.maxResults, "max-results", "m", 0, "Maximum results to emit (0 means unlimited)")
+	flags.IntVar(&options.maxWorkers, "max-workers", options.maxWorkers, "Maximum files searched concurrently")
+	flags.Int64Var(&options.maxLineSize, "max-line-size", options.maxLineSize, "Maximum bytes in one normal-mode line")
+	flags.Int64Var(&options.maxMultilineSize, "max-multiline-size", options.maxMultilineSize, "Maximum bytes in one multiline-mode file")
+	flags.BoolVarP(&options.listMode, "list", "l", false, "List one directory instead of searching")
+	flags.BoolVar(&options.showHidden, "show-hidden", false, "Show hidden entries in list mode")
+	flags.BoolVar(&options.suppressWarnings, "suppress-warnings", false, "Hide per-path warnings without changing exit status")
+	flags.BoolVar(&options.searchAll, "all", false, "Search every filename while still skipping NUL-binary files")
 	return root
 }
 
 func runSearch(
-	_ context.Context,
-	directory string,
-	keyword string,
+	ctx context.Context,
+	args []string,
 	options commandOptions,
 	stdout io.Writer,
 	stderr io.Writer,
 ) error {
-	var fileExtensions, excludeDirs, excludeFiles []string
-	if options.extensions != "" {
-		fileExtensions = strings.Split(options.extensions, ",")
-	}
-	if options.excludeDirs != "" {
-		excludeDirs = strings.Split(options.excludeDirs, ",")
-	}
-	if options.excludeFiles != "" {
-		excludeFiles = strings.Split(options.excludeFiles, ",")
-	}
-
-	searcher := NewFileSearcher(
-		options.caseSensitive,
-		options.suppressWarnings,
-		options.searchAll,
-		fileExtensions,
-		excludeDirs,
-		excludeFiles,
-		stdout,
-		stderr,
-	)
-
 	if options.listMode {
-		return searcher.listDirectoryContents(directory, options.showHidden)
+		if len(args) == 2 {
+			if _, err := fmt.Fprintln(stderr, "Warning: the two-argument --list form is deprecated; use find-content --list <directory>"); err != nil {
+				return fmt.Errorf("write deprecation warning: %w", err)
+			}
+		}
+		return searcher.List(ctx, args[0], options.showHidden, func(entry searcher.ListEntry) error {
+			return renderListEntry(stdout, entry)
+		})
+	}
+	if args[1] == "" {
+		return errors.New("keyword must not be empty")
 	}
 
-	var maxResults *int
-	if options.maxResults > 0 {
-		maxResults = &options.maxResults
+	render := renderer{
+		stdout:           stdout,
+		stderr:           stderr,
+		showLineNumbers:  !options.noLineNumbers,
+		showFilePath:     !options.noFilePath,
+		multiline:        options.multiline,
+		suppressWarnings: options.suppressWarnings,
 	}
-
-	matches := searcher.grepRecursive(
-		directory,
-		keyword,
-		options.useRegex,
-		options.multiline,
-		!options.noLineNumbers,
-		!options.noFilePath,
-		maxResults,
-	)
-	if matches == 0 {
-		fmt.Fprintln(stdout, "No matches found")
-	} else {
-		fmt.Fprintf(stdout, "\nFound %d match(es)\n", matches)
+	summary, err := searcher.Search(ctx, searcher.Options{
+		Root:             args[0],
+		Keyword:          args[1],
+		UseRegex:         options.useRegex,
+		CaseSensitive:    options.caseSensitive,
+		Multiline:        options.multiline,
+		Extensions:       normalizeCSV(options.extensions),
+		ExcludeDirs:      normalizeCSV(options.excludeDirs),
+		ExcludeFiles:     normalizeCSV(options.excludeFiles),
+		NoDefaultExclude: options.noDefaultExclude,
+		SearchAll:        options.searchAll,
+		MaxWorkers:       options.maxWorkers,
+		MaxLineSize:      options.maxLineSize,
+		MaxMultilineSize: options.maxMultilineSize,
+		MaxResults:       options.maxResults,
+	}, render.handle)
+	if err != nil {
+		return err
 	}
-
+	if summary.Matches > 0 {
+		if _, err := fmt.Fprintf(stdout, "\nFound %d match(es)\n", summary.Matches); err != nil {
+			return fmt.Errorf("write match summary: %w", err)
+		}
+	}
+	if summary.PartialErrors > 0 {
+		return &exitError{code: 2, message: fmt.Sprintf("search incomplete: %d diagnostic(s)", summary.PartialErrors)}
+	}
+	if summary.Matches == 0 {
+		if _, err := fmt.Fprintln(stdout, "No matches found"); err != nil {
+			return fmt.Errorf("write no-match summary: %w", err)
+		}
+		return &exitError{code: 1}
+	}
 	return nil
 }

@@ -60,16 +60,17 @@ Preserve every existing flag name, shorthand, default, help string, accepted
 positional-argument policy, precedence rule, and domain fallback. Lifecycle
 normalization does not authorize stricter validation or a CLI redesign.
 
-Wrong arguments, unknown flags, validation failures, and operational failures
-return exit code 1 and one error line on stderr. They must not duplicate the
-error on stdout or print usage unless help was explicitly requested.
+Unless a module-specific contract below documents distinct status codes, wrong
+arguments, unknown flags, validation failures, and operational failures return
+exit code 1 and one error line on stderr. They must not duplicate the error on
+stdout or print usage unless help was explicitly requested.
 
 ## Module Compatibility
 
 | Module | Behavior that must remain unchanged |
 | --- | --- |
 | `case-converter` | File input takes precedence over positional input; `--format` takes precedence over `--all`; arbitrary positional arguments remain accepted and only `args[0]` is consumed; no input clears the screen, prints help, and exits 0; current line processing and conversion keys remain unchanged. |
-| `find-content` | Keep `cobra.ExactArgs(2)` even in list mode; retain all 13 flags, untrimmed comma splitting, `--max-results <= 0` as unlimited, existing match formatting and ordering policy, and current invalid-regex and missing/list-directory error policies. |
+| `find-content` | Search accepts exactly `<directory> <keyword>`; list accepts canonical `--list <directory>` plus the deprecated two-argument form. Preserve deterministic relative-path ordering, exact nonnegative `--max-results`, CSV normalization, hidden/default-exclude policy, regular-file/NUL checks, and exit `0` match/list/help, `1` clean no-match, `2` usage/fatal/partial-error behavior. |
 | `check-folder-size` | Keep `cobra.MaximumNArgs(1)`, default path, size parsing, sorting, filtering, timeout, JSON formatting, progress text, and screen-clear policy. |
 | `find-everything` | Keep `cobra.ExactArgs(2)`, size parsing, finder options, conflicting large-result validation, prompt/action resolution, progress and result output, and ANSI presentation. |
 | `api-stress-test` | Continue accepting arbitrary positional arguments; retain every flag default, non-positive request/concurrency fallbacks, signal handling, warmup and worker shutdown behavior, progress/output formats, output-file behavior, and failure exit semantics. |

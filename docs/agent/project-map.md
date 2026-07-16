@@ -8,7 +8,7 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 - There is no root Go module. Each tool has its own `go.mod`.
 - All six executable entrypoints are minimal wrappers; command construction, streams, errors, and invocation-local options live in each module's `cmd/root.go` as documented in `docs/agent/cli-conventions.md`.
 - There is no `docs/agent/` history before this guide set.
-- There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI is limited to the `replace-text` GitHub Actions workflow.
+- There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI has GitHub and Gitea workflows for the modules listed under Operational Surfaces.
 - `.serena/` is local tooling metadata and is ignored by `.gitignore`; do not treat it as source.
 
 ## Modules
@@ -18,7 +18,7 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 | `api-stress-test/` | Modular Cobra CLI | HTTP load/stress testing | `cmd/root.go`, `internal/request/client.go`, `internal/stats/collector.go`, `internal/ui/output.go` |
 | `case-converter/` | Modular Cobra CLI | Text case conversion | `cmd/root.go`, `cmd/converter.go` |
 | `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/types.go`, `internal/scanner/scanner.go`, `internal/scanner/metadata.go`, `internal/ui/printer.go` |
-| `find-content/` | Modular Cobra CLI | Text search and directory listing | `cmd/root.go`, `cmd/searcher.go` |
+| `find-content/` | Modular Cobra CLI | Deterministic bounded text search and directory listing | `cmd/root.go`, `cmd/render.go`, `internal/searcher/searcher.go`, `internal/searcher/coordinator.go` |
 | `find-everything/` | Modular Cobra CLI | File finding and filtering | `cmd/root.go`, `internal/finder/finder.go`, `internal/finder/walker.go`, `internal/ui/display.go` |
 | `replace-text/` | Modular Cobra CLI | Streaming find/replace with concurrent traversal and mutation safety | `cmd/root.go`, `internal/replacer/types.go`, `internal/replacer/processor.go`, `internal/replacer/stream.go`, `internal/replacer/metadata.go` |
 | `common-module/` | Shared module | Utility helpers | `utils/struct_utils.go`, `utils/system_command_executor.go` |
@@ -47,7 +47,7 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `check-folder-size/cmd/root.go` owns JSON/progress stream routing, partial warnings, and exit behavior; `check-folder-size/internal/ui/printer.go` renders terminal results.
 - `find-everything/internal/ui/display.go`
 - `case-converter/cmd/converter.go`
-- `find-content/cmd/root.go` and `find-content/cmd/searcher.go`
+- `find-content/cmd/root.go` and `find-content/cmd/render.go`
 - `replace-text/cmd/root.go`
 
 `README.md` is the main user-facing documentation surface for examples and installation notes.
@@ -66,6 +66,6 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
-- `.github/workflows/replace-text-ci.yml` runs `replace-text` tests, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners.
+- `.github/workflows/replace-text-ci.yml` runs `replace-text` tests, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners. `.gitea/workflows/find-content-ci.yml` runs native `find-content` checks on the same OS families plus Linux race/determinism gates.
 - No container files, deploy scripts, env templates, or release automation are present.
 - Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.

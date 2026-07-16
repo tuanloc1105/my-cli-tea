@@ -14,6 +14,11 @@ go build -trimpath ./...
 
 The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`. This checkout keeps Gitea as its fetch source and uses multiple `origin` push URLs so one push updates both Gitea and GitHub. That dual-push configuration lives in local Git config; other clones must configure their own GitHub push destination.
 
+
+## Gitea Actions CI
+
+`.gitea/workflows/find-content-ci.yml` verifies `find-content` on Ubuntu, macOS, and Windows when the module or workflow changes. Every OS runs `go test ./...`, `go vet ./...`, and `go build -trimpath ./...`; Linux also runs the race detector and the repeated determinism/result-cap gate.
+
 ## Local Build
 
 Build one module without installing:
@@ -112,6 +117,9 @@ bash -lc 'for d in api-stress-test case-converter check-folder-size common-modul
 - `check-folder-size/` accounting or concurrency changes: add `cd check-folder-size && go test -race ./...`
 - `check-folder-size/` platform metadata or build-tag changes: run scanner tests natively on the target OS and cross-build Darwin, Linux, and Windows with the toolchain declared by `check-folder-size/go.mod`; cross-build is a compile gate, not a substitute for native filesystem tests.
 - `find-content/cmd/` search, listing, filters, or CLI behavior: `cd find-content && go test ./cmd`
+- `find-content/internal/searcher/` matching, readers, traversal, file policy, ordering, or cancellation: `cd find-content && go test ./internal/searcher`
+- `find-content/` concurrency or deterministic-cap changes: add `cd find-content && go test -race ./...` and `cd find-content && go test ./... -run 'Deterministic|Ordering|MaxResults|Coordinator' -count=20`
+- `find-content/` matcher changes: add `cd find-content && go test ./... -run '^$' -fuzz '^FuzzMatcher$' -fuzztime=10s`
 - `find-everything/cmd/` flags, validation, output routing, or exit behavior: `cd find-everything && go test ./cmd`
 - `find-everything/internal/ui/` large-result behavior: `cd find-everything && go test ./internal/ui`
 - `replace-text/cmd/` flags, validation, output, or exit behavior: `cd replace-text && go test ./cmd`

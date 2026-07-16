@@ -22,6 +22,12 @@ Test files currently exist in:
 - `check-folder-size/internal/scanner/types_test.go`
 - `check-folder-size/internal/ui/printer_test.go`
 - `find-content/cmd/root_test.go`
+- `find-content/internal/searcher/matcher_test.go`
+- `find-content/internal/searcher/reader_test.go`
+- `find-content/internal/searcher/searcher_test.go`
+- `find-content/internal/searcher/special_unix_test.go`
+- `find-content/internal/searcher/hidden_darwin_test.go`
+- `find-content/internal/searcher/hidden_windows_test.go`
 - `find-everything/cmd/root_test.go`
 - `find-everything/internal/ui/display_test.go`
 - `replace-text/cmd/root_test.go`
@@ -37,11 +43,15 @@ Benchmarks currently present are:
 
 - `api-stress-test/internal/stats/collector_test.go`: `BenchmarkCollectorRecord`
 - `replace-text/internal/replacer/stream_test.go`: `BenchmarkStreamReplace`
+- `find-content/internal/searcher/matcher_test.go`: `BenchmarkMatcher`
+- `find-content/internal/searcher/reader_test.go`: `BenchmarkReader`
+- `find-content/internal/searcher/searcher_test.go`: `BenchmarkCoordinator`
 
 The current fuzz target is:
 
 - `replace-text/internal/replacer/stream_fuzz_test.go`: `FuzzStreamReplace`
 
+- `find-content/internal/searcher/matcher_test.go`: `FuzzMatcher`
 `common-module/` is the only module without test files. Verify it through all three importing consumers when shared utilities change.
 
 ## Verification Matrix
@@ -60,6 +70,10 @@ The current fuzz target is:
 | `check-folder-size` platform metadata | Run native scanner tests on the target OS; at minimum cross-build Darwin, Linux, and Windows with a toolchain satisfying `check-folder-size/go.mod` |
 | `find-content/cmd/` | `cd find-content && go test ./cmd` |
 | `find-everything/cmd/` | `cd find-everything && go test ./cmd` |
+| `find-content/internal/searcher/` | `cd find-content && go test ./internal/searcher` |
+| `find-content` concurrency/order | `cd find-content && go test -race ./... && go test ./... -run 'Deterministic\|Ordering\|MaxResults\|Coordinator' -count=20` |
+| `find-content` matcher fuzz | `cd find-content && go test ./... -run '^$' -fuzz '^FuzzMatcher$' -fuzztime=10s` |
+| `find-content` cross-platform CI | `.gitea/workflows/find-content-ci.yml` runs native tests, vet, and builds on Ubuntu, macOS, and Windows; Linux also runs race and determinism gates |
 | `find-everything/internal/ui/` | `cd find-everything && go test ./internal/ui` |
 | `replace-text/cmd/` | `cd replace-text && go test ./cmd` |
 | `replace-text/internal/replacer/` | `cd replace-text && go test ./internal/replacer` |
@@ -73,7 +87,7 @@ The current fuzz target is:
 ## Gaps To Consider
 
 - Add focused tests for any newly introduced CLI behavior that is not covered by the command fixtures.
-- Extend `find-content/cmd/root_test.go` when changing concurrent result semantics; current tests intentionally do not assert result ordering.
+- Extend `find-content/internal/searcher/searcher_test.go` when changing traversal, ordering, cancellation, or result-cap semantics.
 - Run `check-folder-size/internal/scanner/scanner_windows_test.go` on native Windows when changing allocation, file identity, reparse-point, or hidden-attribute handling; cross-build alone does not validate runtime filesystem semantics.
 - Add direct `common-module/` tests if shared utilities gain behavior that cannot be characterized safely through consumers.
 
