@@ -2,23 +2,41 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
-	"common-module/utils"
 	"find-everything/internal/finder"
 	"find-everything/internal/types"
 	"find-everything/internal/ui"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
-type searchRunner func(context.Context, string, string, finder.FinderOptions) ([]types.FileResult, []string, error)
+type searchRunner func(context.Context, string, string, finder.FinderOptions) (types.SearchResults, error)
 
-type resultsPrinter func([]types.FileResult, []string, ui.ResultsOutputOptions) error
+type headerPrinter func(string, string, ui.ResultsOutputOptions) error
+
+type resultsPrinter func(types.SearchResults, ui.ResultsOutputOptions) error
+
+type ttyDetector func(any) bool
+
+type exitCodeError struct {
+	code int
+}
+
+func (e exitCodeError) Error() string {
+	return fmt.Sprintf("exit code %d", e.code)
+}
 
 type commandOptions struct {
 	caseSensitive      bool
@@ -39,13 +57,25 @@ type commandOptions struct {
 
 // ExecuteContext runs find-everything with the supplied process arguments and
 // streams. It returns the process exit code without terminating the caller.
-func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return executeContext(ctx, args, stdout, stderr, runFinder, ui.PrintResults, utils.CLS)
+func ExecuteContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return executeContext(ctx, args, stdin, stdout, stderr, runFinder, ui.PrintSearchHeader, ui.PrintSearchResults, isTTY)
 }
 
-func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer, run searchRunner, printResults resultsPrinter, clearScreen func()) int {
+func executeContext(
+	ctx context.Context,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+	run searchRunner,
+	printHeader headerPrinter,
+	printResults resultsPrinter,
+	detectTTY ttyDetector,
+) int {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if stdin == nil {
+		stdin = strings.NewReader("")
 	}
 	if stdout == nil {
 		stdout = io.Discard
@@ -56,17 +86,40 @@ func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	if args == nil {
 		args = []string{}
 	}
-
-	root := newRootCommand(run, printResults, clearScreen, stdout, stderr)
-	root.SetArgs(args)
-	if err := root.ExecuteContext(ctx); err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
-		return 1
+	if detectTTY == nil {
+		detectTTY = func(any) bool { return false }
 	}
-	return 0
+
+	root := newRootCommand(run, printHeader, printResults, detectTTY, stdin, stdout, stderr)
+	root.SetArgs(args)
+	err := root.ExecuteContext(ctx)
+	if ctx.Err() != nil {
+		fmt.Fprintln(stderr, "Search canceled.")
+		return 130
+	}
+	if err == nil {
+		return 0
+	}
+
+	var exitErr exitCodeError
+	if errors.As(err, &exitErr) {
+		if exitErr.code == 130 {
+			fmt.Fprintln(stderr, "Search canceled.")
+		}
+		return exitErr.code
+	}
+	fmt.Fprintf(stderr, "Error: %s\n", ui.SafeText(err.Error()))
+	return 1
 }
 
-func newRootCommand(run searchRunner, printResults resultsPrinter, clearScreen func(), stdout, stderr io.Writer) *cobra.Command {
+func newRootCommand(
+	run searchRunner,
+	printHeader headerPrinter,
+	printResults resultsPrinter,
+	detectTTY ttyDetector,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) *cobra.Command {
 	options := commandOptions{
 		maxWorkers:         runtime.NumCPU(),
 		minSize:            "0",
@@ -82,16 +135,28 @@ func newRootCommand(run searchRunner, printResults resultsPrinter, clearScreen f
 
 This tool provides comprehensive file and directory searching capabilities with
 support for glob patterns, size filtering, file type filtering, and exclusion rules.`,
-		Example: `  find-everything "C:\" "*.txt" --file-types .txt .log
-  find-everything "/home/user" "*.py" --exclude-dirs node_modules .git
-  find-everything "D:\" "zalo*" --min-size 1MB --max-size 100MB
-  find-everything "." "*.jpg" --case-sensitive --show-details`,
+		Example: `  find-everything "C:\" "*.txt" --file-types txt,log
+	find-everything "/home/user" "*.py" --exclude-dirs node_modules,.git
+	find-everything "D:\" "zalo*" --min-size 1MB --max-size 100MB
+	find-everything "." "*.jpg" --case-sensitive --show-details`,
 		Args:          cobra.ExactArgs(2),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Context().Err() != nil {
+				return exitCodeError{code: 130}
+			}
 			basePath := args[0]
 			pattern := args[1]
+			if pattern == "" {
+				return fmt.Errorf("pattern must not be empty")
+			}
+			if options.maxWorkers <= 0 {
+				return fmt.Errorf("max-workers must be greater than zero")
+			}
+			if options.maxResults <= 0 {
+				return fmt.Errorf("max-results must be greater than zero")
+			}
 
 			resolvedLargeResultsAction, err := resolveLargeResultsAction(cmd, options.largeResultsAction, options.displayAll, options.outputPath)
 			if err != nil {
@@ -107,6 +172,9 @@ support for glob patterns, size filtering, file type filtering, and exclusion ru
 			if err != nil {
 				return fmt.Errorf("error parsing max-size: %w", err)
 			}
+			if minSizeBytes > maxSizeBytes {
+				return fmt.Errorf("min-size must not exceed max-size")
+			}
 
 			processedExcludeDirs := []string{}
 			for _, item := range options.excludeDirs {
@@ -118,11 +186,44 @@ support for glob patterns, size filtering, file type filtering, and exclusion ru
 				}
 			}
 
-			clearScreen()
+			stdoutTTY := detectTTY(stdout)
+			stderrTTY := detectTTY(stderr)
+			outputOptions := ui.ResultsOutputOptions{
+				ShowDetails:        options.showDetails,
+				Pattern:            pattern,
+				BasePath:           basePath,
+				NoSort:             options.noSort,
+				LargeResultsAction: resolvedLargeResultsAction,
+				OutputPath:         options.outputPath,
+				PromptReader:       stdin,
+				PromptWriter:       stderr,
+				Stdout:             stdout,
+				Stderr:             stderr,
+				StdoutTTY:          stdoutTTY,
+				StderrTTY:          stderrTTY,
+				PromptTTY:          detectTTY(stdin) && stderrTTY,
+			}
+			if err := printHeader(basePath, pattern, outputOptions); err != nil {
+				return err
+			}
 
-			fmt.Fprintf(stdout, "%s%sEnhanced File and Directory Finder%s\n", ui.ColorBold, ui.ColorHeader, ui.ColorEndC)
-			fmt.Fprintf(stdout, "%sSearching in: %s%s\n", ui.ColorOKBlue, basePath, ui.ColorEndC)
-			fmt.Fprintf(stdout, "%sPattern: %s%s\n", ui.ColorOKBlue, pattern, ui.ColorEndC)
+			var progressErr error
+			var progressMu sync.Mutex
+			var progressRendered atomic.Bool
+			recordProgressError := func(err error) {
+				if err == nil {
+					return
+				}
+				progressMu.Lock()
+				defer progressMu.Unlock()
+				if progressErr == nil {
+					progressErr = err
+				}
+			}
+			var progressRenderer *ui.Renderer
+			if !options.noProgress && stderrTTY {
+				progressRenderer = ui.NewRenderer(stderr, io.Discard, true, false)
+			}
 
 			finderOptions := finder.FinderOptions{
 				CaseSensitive:   options.caseSensitive,
@@ -133,25 +234,39 @@ support for glob patterns, size filtering, file type filtering, and exclusion ru
 				MinSize:         minSizeBytes,
 				MaxSize:         maxSizeBytes,
 				MaxResults:      options.maxResults,
-				ShowProgress:    !options.noProgress,
-				NoSort:          options.noSort,
-				Writer:          stdout,
+			}
+			if progressRenderer != nil {
+				finderOptions.Progress = func(snapshot types.ProgressSnapshot) {
+					progressRendered.Store(true)
+					recordProgressError(progressRenderer.RenderProgress(snapshot))
+				}
 			}
 
-			files, dirs, err := run(cmd.Context(), basePath, pattern, finderOptions)
-			if err != nil {
+			results, searchErr := run(cmd.Context(), basePath, pattern, finderOptions)
+			if progressRendered.Load() {
+				if _, err := fmt.Fprintln(stderr); err != nil {
+					recordProgressError(fmt.Errorf("finish progress output: %w", err))
+				}
+			}
+			if errors.Is(searchErr, context.Canceled) || errors.Is(searchErr, context.DeadlineExceeded) {
+				return exitCodeError{code: 130}
+			}
+			if searchErr != nil {
+				return searchErr
+			}
+			progressMu.Lock()
+			deferredProgressErr := progressErr
+			progressMu.Unlock()
+			if deferredProgressErr != nil {
+				return deferredProgressErr
+			}
+			if err := printResults(results, outputOptions); err != nil {
 				return err
 			}
-
-			return printResults(files, dirs, ui.ResultsOutputOptions{
-				ShowDetails:        options.showDetails,
-				Pattern:            pattern,
-				BasePath:           basePath,
-				NoSort:             options.noSort,
-				LargeResultsAction: resolvedLargeResultsAction,
-				OutputPath:         options.outputPath,
-				Writer:             stdout,
-			})
+			if results.Report.Incomplete {
+				return exitCodeError{code: 2}
+			}
+			return nil
 		},
 	}
 	root.SetOut(stdout)
@@ -176,14 +291,17 @@ support for glob patterns, size filtering, file type filtering, and exclusion ru
 	return root
 }
 
-func runFinder(ctx context.Context, basePath, pattern string, options finder.FinderOptions) ([]types.FileResult, []string, error) {
-	options.Context = ctx
+func runFinder(ctx context.Context, basePath, pattern string, options finder.FinderOptions) (types.SearchResults, error) {
 	f, err := finder.NewFileFinder(basePath, pattern, options)
 	if err != nil {
-		return nil, nil, err
+		return types.SearchResults{}, err
 	}
-	files, dirs := f.FindFilesAndDirs()
-	return files, dirs, nil
+	return f.FindFilesAndDirs(ctx)
+}
+
+func isTTY(stream any) bool {
+	file, ok := stream.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
 }
 
 func resolveLargeResultsAction(cmd *cobra.Command, action string, displayAll bool, outputPath string) (string, error) {
@@ -221,8 +339,12 @@ func resolveLargeResultsAction(cmd *cobra.Command, action string, displayAll boo
 }
 
 func parseSize(sizeStr string) (int64, error) {
-	if strings.ToLower(sizeStr) == "inf" {
+	sizeStr = strings.TrimSpace(sizeStr)
+	if strings.EqualFold(sizeStr, "inf") {
 		return 1<<63 - 1, nil // Max int64
+	}
+	if sizeStr == "" {
+		return 0, fmt.Errorf("size must not be empty")
 	}
 
 	sizeStr = strings.ToUpper(sizeStr)
@@ -243,14 +365,29 @@ func parseSize(sizeStr string) (int64, error) {
 	for _, u := range units {
 		if strings.HasSuffix(sizeStr, u.suffix) {
 			numStr := strings.TrimSuffix(sizeStr, u.suffix)
-			num, err := strconv.ParseFloat(numStr, 64)
-			if err != nil {
-				return 0, err
+			num, ok := new(big.Rat).SetString(numStr)
+			if !ok {
+				return 0, fmt.Errorf("size must be finite and non-negative")
 			}
-			return int64(num * float64(u.multiplier)), nil
+			if num.Sign() < 0 {
+				return 0, fmt.Errorf("size must be finite and non-negative")
+			}
+			scaled := new(big.Rat).Mul(num, big.NewRat(u.multiplier, 1))
+			if scaled.Cmp(big.NewRat(math.MaxInt64, 1)) > 0 {
+				return 0, fmt.Errorf("size overflows int64")
+			}
+			wholeBytes := new(big.Int).Quo(scaled.Num(), scaled.Denom())
+			return wholeBytes.Int64(), nil
 		}
 	}
 
 	// No unit specified, assume bytes
-	return strconv.ParseInt(sizeStr, 10, 64)
+	value, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("size must be non-negative")
+	}
+	return value, nil
 }

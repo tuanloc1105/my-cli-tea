@@ -14,6 +14,15 @@ go build -trimpath ./...
 
 The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`. This checkout keeps Gitea as its fetch source and uses multiple `origin` push URLs so one push updates both Gitea and GitHub. That dual-push configuration lives in local Git config; other clones must configure their own GitHub push destination.
 
+## Gitea Actions CI
+
+`.gitea/workflows/find-everything.yml` verifies `find-everything` on native
+`ubuntu-latest`, `macos-latest`, and `windows-latest` runners with Go 1.24.4.
+Every job runs module verification, tests, vet, and build; Linux also runs the
+race detector. The native finder-policy step exercises the OS-specific hidden
+attribute tests and symlink contract. Windows runners must allow symlink
+creation through Developer Mode or `SeCreateSymbolicLinkPrivilege`; the test
+fails with that prerequisite instead of silently skipping.
 
 ## Gitea Actions CI
 
@@ -121,13 +130,15 @@ bash -lc 'for d in api-stress-test case-converter check-folder-size common-modul
 - `find-content/` concurrency or deterministic-cap changes: add `cd find-content && go test -race ./...` and `cd find-content && go test ./... -run 'Deterministic|Ordering|MaxResults|Coordinator' -count=20`
 - `find-content/` matcher changes: add `cd find-content && go test ./... -run '^$' -fuzz '^FuzzMatcher$' -fuzztime=10s`
 - `find-everything/cmd/` flags, validation, output routing, or exit behavior: `cd find-everything && go test ./cmd`
+- `find-everything/internal/finder/` traversal, result caps, cancellation, partial reports, symlinks, or hidden entries: `cd find-everything && go test ./internal/finder`
+- `find-everything/` concurrency-sensitive changes: add `cd find-everything && go test -race ./internal/finder -run 'Test.*(Limit|Queue|Cancel|Partial)' -count=20`
 - `find-everything/internal/ui/` large-result behavior: `cd find-everything && go test ./internal/ui`
 - `replace-text/cmd/` flags, validation, output, or exit behavior: `cd replace-text && go test ./cmd`
 - `replace-text/internal/replacer/` streaming, metadata, backup/rollback, cancellation, or worker behavior: `cd replace-text && go test ./internal/replacer`
 - `replace-text/` concurrency or transactional commit changes: add `cd replace-text && go test -race ./...`
 - `replace-text/` streaming matcher changes: add `cd replace-text && go test ./internal/replacer -run '^$' -fuzz '^FuzzStreamReplace$' -fuzztime=10s`
 - `replace-text/` platform metadata or build-tag changes: cross-build affected targets to `/tmp`, for example `cd replace-text && CGO_ENABLED=0 GOOS=<darwin|linux|windows> GOARCH=amd64 go build -trimpath -o /tmp/replace-text-<os>-amd64 .`
-- `common-module/utils/` changes: test/build the three consumers that import it: `case-converter`, `check-folder-size`, and `find-everything`.
+- `common-module/utils/` changes: test/build the two consumers that import it: `case-converter` and `check-folder-size`.
 
 ## Docs Checks
 

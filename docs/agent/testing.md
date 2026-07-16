@@ -29,6 +29,11 @@ Test files currently exist in:
 - `find-content/internal/searcher/hidden_darwin_test.go`
 - `find-content/internal/searcher/hidden_windows_test.go`
 - `find-everything/cmd/root_test.go`
+- `find-everything/internal/finder/walker_test.go`
+- `find-everything/internal/finder/walker_darwin_test.go`
+- `find-everything/internal/finder/walker_unix_test.go`
+- `find-everything/internal/finder/walker_windows_test.go`
+- `find-everything/internal/types/types_test.go`
 - `find-everything/internal/ui/display_test.go`
 - `replace-text/cmd/root_test.go`
 - `replace-text/internal/replacer/metadata_test.go`
@@ -50,9 +55,9 @@ Benchmarks currently present are:
 The current fuzz target is:
 
 - `replace-text/internal/replacer/stream_fuzz_test.go`: `FuzzStreamReplace`
-
 - `find-content/internal/searcher/matcher_test.go`: `FuzzMatcher`
-`common-module/` is the only module without test files. Verify it through all three importing consumers when shared utilities change.
+
+`common-module/` is the only module without test files. Verify it through both importing consumers when shared utilities change.
 
 ## Verification Matrix
 
@@ -69,11 +74,14 @@ The current fuzz target is:
 | `check-folder-size` accounting/concurrency | `cd check-folder-size && go test -race ./...` |
 | `check-folder-size` platform metadata | Run native scanner tests on the target OS; at minimum cross-build Darwin, Linux, and Windows with a toolchain satisfying `check-folder-size/go.mod` |
 | `find-content/cmd/` | `cd find-content && go test ./cmd` |
-| `find-everything/cmd/` | `cd find-everything && go test ./cmd` |
 | `find-content/internal/searcher/` | `cd find-content && go test ./internal/searcher` |
 | `find-content` concurrency/order | `cd find-content && go test -race ./... && go test ./... -run 'Deterministic\|Ordering\|MaxResults\|Coordinator' -count=20` |
 | `find-content` matcher fuzz | `cd find-content && go test ./... -run '^$' -fuzz '^FuzzMatcher$' -fuzztime=10s` |
 | `find-content` cross-platform CI | `.gitea/workflows/find-content-ci.yml` runs native tests, vet, and builds on Ubuntu, macOS, and Windows; Linux also runs race and determinism gates |
+| `find-everything/cmd/` | `cd find-everything && go test ./cmd` |
+| `find-everything/internal/finder/` | `cd find-everything && go test ./internal/finder` |
+| `find-everything` concurrency/cancellation | `cd find-everything && go test -race ./internal/finder -run 'Test.*(Limit|Queue|Cancel|Partial)' -count=20` |
+| `find-everything` cross-platform policies | `.gitea/workflows/find-everything.yml` runs native hidden and symlink tests on Ubuntu, macOS, and Windows |
 | `find-everything/internal/ui/` | `cd find-everything && go test ./internal/ui` |
 | `replace-text/cmd/` | `cd replace-text && go test ./cmd` |
 | `replace-text/internal/replacer/` | `cd replace-text && go test ./internal/replacer` |
@@ -81,7 +89,7 @@ The current fuzz target is:
 | `replace-text` streaming replacement | `cd replace-text && go test ./internal/replacer -run '^$' -fuzz '^FuzzStreamReplace$' -fuzztime=10s` |
 | `replace-text` cross-platform CI | `.github/workflows/replace-text-ci.yml` runs test, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners |
 | Any module-wide change | `cd <tool-dir> && go test ./...` |
-| `common-module/utils/` | Test/build each importing consumer: `case-converter`, `check-folder-size`, `find-everything` |
+| `common-module/utils/` | Test/build each importing consumer: `case-converter` and `check-folder-size` |
 | Docs-only change | `git diff --check` plus path/link checks |
 
 ## Gaps To Consider

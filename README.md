@@ -172,26 +172,33 @@ interrupted immediately.
 **Purpose:** Advanced file and directory finder with pattern matching and filtering.
 
 **Key Features:**
-- Pattern-based file/directory matching
-- Size filtering (min/max)
-- File type filtering
-- Parallel processing
-- Progress tracking
+- Exact bounded-concurrency result caps
+- Basename patterns with `*` and `?`
+- Size and file-type filtering (`go` and `.go` are equivalent)
+- Hidden files and directories included by default on Linux, macOS, and Windows
+- TTY-aware color/progress and plain redirected output
+- Partial-scan reporting and safe large-result output files
 
 **Usage:**
 ```bash
 # Find files by pattern
-./find-everything "*.txt" /path/to/search
+./find-everything /path/to/search "*.txt"
 
 # Filter by size
-./find-everything -min-size "1MB" -max-size "100MB" "*.log" /path
+./find-everything /path/to/search "*.log" --min-size 1MB --max-size 100MB
 
-# Find specific file types
-./find-everything -file-types "go,js,py" "*" /path
+# Find specific file types; leading dots are optional
+./find-everything /path/to/search "*" --file-types go,.js,py
 
-# Show progress
-./find-everything -progress "*.md" /path
+# Disable progress even when stderr is a terminal
+./find-everything /path/to/search "*.md" --no-progress
 ```
+
+Patterns apply only to each entry's basename. Quote them so the shell does not
+expand them first. Brace expansion, character classes, and `.gitignore`
+filtering are not supported. Exit statuses are `0` for complete/no-match/limit,
+`1` for validation or fatal output errors, `2` for partial traversal results,
+and `130` for cancellation.
 
 ### Replace Text
 
@@ -276,7 +283,9 @@ my-cli/
 ```
 
 ### Building from Source
-Each tool is self-contained with its own `go.mod` file and references `common-module` via a local `replace` directive.
+Each tool is self-contained with its own `go.mod` file. `case-converter` and
+`check-folder-size` reference `common-module` via a local `replace` directive;
+the other tools build independently.
 
 Use the Makefile to build and install:
 ```bash
@@ -329,10 +338,10 @@ All tools use:
 ### File Discovery
 ```bash
 # Find all configuration files
-./find-everything "*.{json,yaml,yml,ini}" /path/to/config
+./find-everything /path/to/config "*" --file-types json,yaml,yml,ini
 
 # Find large log files
-./find-everything -min-size "10MB" "*.log" /var/log
+./find-everything /var/log "*.log" --min-size 10MB
 ```
 
 ## 🤝 Contributing

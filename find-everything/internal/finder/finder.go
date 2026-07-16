@@ -1,16 +1,14 @@
 package finder
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"find-everything/internal/ui"
+	"find-everything/internal/types"
 )
 
 // FinderOptions holds all configuration for FileFinder
@@ -22,36 +20,45 @@ type FinderOptions struct {
 	FileTypes       []string
 	MinSize         int64
 	MaxSize         int64
-	ShowProgress    bool
 	MaxResults      int
-	NoSort          bool
-	Context         context.Context
-	Writer          io.Writer
+	Progress        types.ProgressFunc
 }
 
 // FileFinder handles file and directory searching
 type FileFinder struct {
 	basePath        string
-	pattern         string
-	caseSensitive   bool
 	maxWorkers      int
 	excludeDirs     map[string]bool
 	excludePatterns []*regexp.Regexp
 	fileTypes       map[string]bool
 	minSize         int64
 	maxSize         int64
-	showProgress    bool
 	maxResults      int
-	noSort          bool
-	progressTracker *ui.ProgressTracker
 	patternRegex    *regexp.Regexp
 	fastMatch       func(string) bool
-	ctx             context.Context
-	cancel          context.CancelFunc
-	writer          io.Writer
+	progress        types.ProgressFunc
 }
 
 func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, error) {
+	if basePath == "" {
+		return nil, fmt.Errorf("base path must not be empty")
+	}
+	if pattern == "" {
+		return nil, fmt.Errorf("pattern must not be empty")
+	}
+	if opts.MaxWorkers <= 0 {
+		return nil, fmt.Errorf("max workers must be greater than zero")
+	}
+	if opts.MaxResults <= 0 {
+		return nil, fmt.Errorf("max results must be greater than zero")
+	}
+	if opts.MinSize < 0 || opts.MaxSize < 0 {
+		return nil, fmt.Errorf("file sizes must not be negative")
+	}
+	if opts.MinSize > opts.MaxSize {
+		return nil, fmt.Errorf("minimum file size must not exceed maximum file size")
+	}
+
 	// Compile pattern regex
 	regexPattern := GlobToRegex(pattern)
 	if !opts.CaseSensitive {
@@ -59,7 +66,7 @@ func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, e
 	}
 	patternRegex, err := regexp.Compile(regexPattern)
 	if err != nil {
-		return nil, fmt.Errorf("invalid pattern: %v", err)
+		return nil, fmt.Errorf("invalid pattern: %w", err)
 	}
 
 	// Compile exclude patterns
@@ -67,7 +74,7 @@ func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, e
 	for _, p := range opts.ExcludePatterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
-			return nil, fmt.Errorf("invalid exclude pattern %q: %v", p, err)
+			return nil, fmt.Errorf("invalid exclude pattern %q: %w", p, err)
 		}
 		excludePatterns = append(excludePatterns, re)
 	}
@@ -81,45 +88,29 @@ func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, e
 	// Build file types set
 	fileTypes := make(map[string]bool)
 	for _, ext := range opts.FileTypes {
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			continue
+		}
+		ext = "." + strings.TrimPrefix(ext, ".")
 		fileTypes[strings.ToLower(ext)] = true
-	}
-
-	ctx := opts.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	writer := opts.Writer
-	if writer == nil {
-		writer = os.Stdout
-	}
-	maxWorkers := opts.MaxWorkers
-	if maxWorkers <= 0 {
-		maxWorkers = 1
 	}
 
 	// Build fast matcher for simple glob patterns
 	fastMatch := buildFastMatcher(pattern, opts.CaseSensitive)
 
 	return &FileFinder{
-		basePath:        basePath,
-		pattern:         pattern,
-		caseSensitive:   opts.CaseSensitive,
-		maxWorkers:      maxWorkers,
+		basePath:        filepath.Clean(basePath),
+		maxWorkers:      opts.MaxWorkers,
 		excludeDirs:     excludeDirs,
 		excludePatterns: excludePatterns,
 		fileTypes:       fileTypes,
 		minSize:         opts.MinSize,
 		maxSize:         opts.MaxSize,
-		showProgress:    opts.ShowProgress,
 		maxResults:      opts.MaxResults,
-		noSort:          opts.NoSort,
-		progressTracker: ui.NewProgressTracker(writer),
 		patternRegex:    patternRegex,
 		fastMatch:       fastMatch,
-		ctx:             ctx,
-		cancel:          cancel,
-		writer:          writer,
+		progress:        opts.Progress,
 	}, nil
 }
 
@@ -172,7 +163,11 @@ func (ff *FileFinder) CheckFileSize(entry fs.DirEntry, fullPath string) (int64, 
 	if !ok {
 		return 0, false
 	}
-	return size, size >= ff.minSize && size <= ff.maxSize
+	return size, ff.matchesFileSize(size)
+}
+
+func (ff *FileFinder) matchesFileSize(size int64) bool {
+	return size >= ff.minSize && size <= ff.maxSize
 }
 
 func (ff *FileFinder) CheckFileType(entryName string) bool {

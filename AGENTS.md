@@ -18,9 +18,9 @@ This is a collection of six standalone Go CLI tools plus one shared module. Each
 | `case-converter/`    | Text case conversion CLI.                                                                              | `case-converter/cmd/root.go`, `case-converter/cmd/converter.go`                  |
 | `check-folder-size/` | Directory size analyzer with terminal and JSON output.                                                 | `check-folder-size/cmd/root.go`, `check-folder-size/internal/scanner/`           |
 | `find-content/`      | Deterministic bounded text search with hidden/special-file policies and directory listing.             | `find-content/cmd/root.go`, `find-content/internal/searcher/`                    |
-| `find-everything/`   | File finder with pattern, size, type, progress, and large-result handling.                             | `find-everything/cmd/root.go`, `find-everything/internal/finder/finder.go`       |
+| `find-everything/`   | Bounded concurrent file finder with partial reports, TTY-safe output, and atomic large-result saves.   | `find-everything/cmd/root.go`, `find-everything/internal/finder/finder.go`       |
 | `replace-text/`      | Streaming find/replace CLI with backups, dry-run, size limits, metadata preservation, and atomic writes. | `replace-text/cmd/root.go`, `replace-text/internal/replacer/`                    |
-| `common-module/`     | Shared utilities used by `case-converter`, `check-folder-size`, and `find-everything`.           | `common-module/utils/`                                                             |
+| `common-module/`     | Shared utilities used by `case-converter` and `check-folder-size`.                                    | `common-module/utils/`                                                             |
 
 For detailed package routing, read `docs/agent/project-map.md`.
 
@@ -42,6 +42,12 @@ cd <tool-dir> && go test ./...
 
 ```bash
 cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
+```
+
+- Repeat the concurrency-sensitive `find-everything` finder tests:
+
+```bash
+cd find-everything && go test ./internal/finder -run 'Test.*(Limit|Queue|Cancel|Partial)' -count=20
 ```
 
 - Build or install through `Makefile` only when that is intended. `make` targets move binaries outside the repo: macOS to `$(HOME)/dev-kit/tool`, Linux to `/usr/local/bin`, Windows/MSYS to `D:/dev-kit/tool`.

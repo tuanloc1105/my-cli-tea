@@ -29,13 +29,11 @@ Only these modules currently require and replace `common-module`:
 
 - `case-converter/go.mod`
 - `check-folder-size/go.mod`
-- `find-everything/go.mod`
 
 Only these source files currently import `common-module/utils`:
 
 - `case-converter/cmd/root.go`
 - `check-folder-size/cmd/root.go`
-- `find-everything/cmd/root.go`
 
 When changing `common-module/utils/`, verify all consumers, not just the shared module.
 
@@ -60,12 +58,12 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `replace-text/internal/replacer/processor.go`, `stream.go`, and `metadata*.go` own traversal/concurrency, streaming UTF-8 replacement and size limits, backup/atomic commits, concurrent-change checks, and platform metadata preservation.
 - `check-folder-size/internal/scanner/types.go` defines scan/result contracts; `scanner.go` owns traversal, concurrency, cancellation, partial results, exclusions, and symlink/hardlink aggregation; `metadata.go` plus `metadata_<os>.go` own logical/allocated metadata and stable file identity.
 - `find-content/internal/searcher/` and `find-everything/internal/finder/` are the other main filesystem traversal/read paths. `find-everything/internal/finder/` owns its bounded queue/local-DFS traversal, exact combined result cap, cancellation cause, partial report, and symlink policy.
-- `find-everything/internal/ui/display.go` can save large result sets to a file.
+- `find-everything/internal/ui/display.go` owns TTY-aware rendering and same-directory temp/rename saves for large result sets.
 
 ## Operational Surfaces
 
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
-- `.github/workflows/replace-text-ci.yml` runs `replace-text` tests, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners. `.gitea/workflows/find-content-ci.yml` runs native `find-content` checks on the same OS families plus Linux race/determinism gates.
+- `.github/workflows/replace-text-ci.yml` runs `replace-text` checks on GitHub-hosted Ubuntu, macOS, and Windows runners. `.gitea/workflows/find-content-ci.yml` runs native `find-content` checks on the same OS families plus Linux race/determinism gates; `.gitea/workflows/find-everything.yml` runs native hidden/symlink checks for `find-everything` plus Linux race coverage.
 - No container files, deploy scripts, env templates, or release automation are present.
 - Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.
