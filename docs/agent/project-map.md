@@ -17,7 +17,7 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 | --- | --- | --- | --- |
 | `api-stress-test/` | Modular Cobra CLI | HTTP load/stress testing | `cmd/root.go`, `internal/request/client.go`, `internal/stats/collector.go`, `internal/ui/output.go` |
 | `case-converter/` | Modular Cobra CLI | Text case conversion | `cmd/root.go`, `cmd/converter.go` |
-| `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/scanner.go`, `internal/ui/printer.go` |
+| `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/types.go`, `internal/scanner/scanner.go`, `internal/scanner/metadata.go`, `internal/ui/printer.go` |
 | `find-content/` | Modular Cobra CLI | Text search and directory listing | `cmd/root.go`, `cmd/searcher.go` |
 | `find-everything/` | Modular Cobra CLI | File finding and filtering | `cmd/root.go`, `internal/finder/finder.go`, `internal/finder/walker.go`, `internal/ui/display.go` |
 | `replace-text/` | Modular Cobra CLI | Streaming find/replace with concurrent traversal and mutation safety | `cmd/root.go`, `internal/replacer/types.go`, `internal/replacer/processor.go`, `internal/replacer/stream.go`, `internal/replacer/metadata.go` |
@@ -44,7 +44,7 @@ When changing `common-module/utils/`, verify all consumers, not just the shared 
 There is no browser frontend. The product surface is CLI terminal output and JSON/text output:
 
 - `api-stress-test/internal/ui/output.go` and `api-stress-test/internal/ui/progress.go`
-- `check-folder-size/internal/ui/printer.go`
+- `check-folder-size/cmd/root.go` owns JSON/progress stream routing, partial warnings, and exit behavior; `check-folder-size/internal/ui/printer.go` renders terminal results.
 - `find-everything/internal/ui/display.go`
 - `case-converter/cmd/converter.go`
 - `find-content/cmd/root.go` and `find-content/cmd/searcher.go`
@@ -58,7 +58,8 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `api-stress-test/internal/request/client.go` handles headers, form data, JSON/raw/file body input, `http.NewRequestWithContext`, response draining, expected status/body checks, and error normalization.
 - `replace-text/cmd/root.go` owns flags, argument handling, user-facing output, and exit codes.
 - `replace-text/internal/replacer/processor.go`, `stream.go`, and `metadata*.go` own traversal/concurrency, streaming UTF-8 replacement and size limits, backup/atomic commits, concurrent-change checks, and platform metadata preservation.
-- `find-content/cmd/searcher.go`, `find-everything/internal/finder/`, and `check-folder-size/internal/scanner/scanner.go` are the main filesystem traversal/read paths.
+- `check-folder-size/internal/scanner/types.go` defines scan/result contracts; `scanner.go` owns traversal, concurrency, cancellation, partial results, exclusions, and symlink/hardlink aggregation; `metadata.go` plus `metadata_<os>.go` own logical/allocated metadata and stable file identity.
+- `find-content/internal/searcher/` and `find-everything/internal/finder/` are the other main filesystem traversal/read paths. `find-everything/internal/finder/` owns its bounded queue/local-DFS traversal, exact combined result cap, cancellation cause, partial report, and symlink policy.
 - `find-everything/internal/ui/display.go` can save large result sets to a file.
 
 ## Operational Surfaces

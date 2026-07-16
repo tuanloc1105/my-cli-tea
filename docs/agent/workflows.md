@@ -109,6 +109,8 @@ bash -lc 'for d in api-stress-test case-converter check-folder-size common-modul
 - `case-converter/cmd/` conversion or CLI behavior: `cd case-converter && go test ./cmd`
 - `check-folder-size/cmd/` flags, output, timeout, or exit behavior: `cd check-folder-size && go test ./cmd`
 - `check-folder-size/internal/scanner/` traversal or progress behavior: `cd check-folder-size && go test ./internal/scanner`
+- `check-folder-size/` accounting or concurrency changes: add `cd check-folder-size && go test -race ./...`
+- `check-folder-size/` platform metadata or build-tag changes: run scanner tests natively on the target OS and cross-build Darwin, Linux, and Windows with the toolchain declared by `check-folder-size/go.mod`; cross-build is a compile gate, not a substitute for native filesystem tests.
 - `find-content/cmd/` search, listing, filters, or CLI behavior: `cd find-content && go test ./cmd`
 - `find-everything/cmd/` flags, validation, output routing, or exit behavior: `cd find-everything && go test ./cmd`
 - `find-everything/internal/ui/` large-result behavior: `cd find-everything && go test ./internal/ui`

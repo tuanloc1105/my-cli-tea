@@ -15,7 +15,11 @@ Test files currently exist in:
 - `case-converter/cmd/root_test.go`
 - `case-converter/cmd/converter_test.go`
 - `check-folder-size/cmd/root_test.go`
+- `check-folder-size/internal/scanner/engine_test.go`
 - `check-folder-size/internal/scanner/scanner_test.go`
+- `check-folder-size/internal/scanner/scanner_unix_test.go`
+- `check-folder-size/internal/scanner/scanner_windows_test.go`
+- `check-folder-size/internal/scanner/types_test.go`
 - `check-folder-size/internal/ui/printer_test.go`
 - `find-content/cmd/root_test.go`
 - `find-everything/cmd/root_test.go`
@@ -52,6 +56,8 @@ The current fuzz target is:
 | `case-converter/cmd/` | `cd case-converter && go test ./cmd` |
 | `check-folder-size/cmd/` | `cd check-folder-size && go test ./cmd` |
 | `check-folder-size/internal/scanner/` | `cd check-folder-size && go test ./internal/scanner` |
+| `check-folder-size` accounting/concurrency | `cd check-folder-size && go test -race ./...` |
+| `check-folder-size` platform metadata | Run native scanner tests on the target OS; at minimum cross-build Darwin, Linux, and Windows with a toolchain satisfying `check-folder-size/go.mod` |
 | `find-content/cmd/` | `cd find-content && go test ./cmd` |
 | `find-everything/cmd/` | `cd find-everything && go test ./cmd` |
 | `find-everything/internal/ui/` | `cd find-everything && go test ./internal/ui` |
@@ -68,12 +74,19 @@ The current fuzz target is:
 
 - Add focused tests for any newly introduced CLI behavior that is not covered by the command fixtures.
 - Extend `find-content/cmd/root_test.go` when changing concurrent result semantics; current tests intentionally do not assert result ordering.
-- Extend `check-folder-size/internal/scanner/scanner_test.go` for new traversal policies such as depth, exclusion, cancellation, or warning behavior.
+- Run `check-folder-size/internal/scanner/scanner_windows_test.go` on native Windows when changing allocation, file identity, reparse-point, or hidden-attribute handling; cross-build alone does not validate runtime filesystem semantics.
 - Add direct `common-module/` tests if shared utilities gain behavior that cannot be characterized safely through consumers.
 
 ## Cobra Command Guidance
 
 All six CLIs have command-package tests for flags, streams, errors, exit codes, and fresh invocation state. Follow `docs/agent/cli-conventions.md` and include two sequential invocations with different flags whenever command state changes.
+
+`check-folder-size` scanner coverage includes allocated/logical accounting,
+directory blocks, hidden entries, symlinks, special entries, sparse files,
+global hardlink dedupe and deterministic attribution, depth/exclusion,
+cancellation, warning-only partial results, metadata/read failures, overflow,
+and non-nil empty results. Allocation assertions use filesystem invariants and
+skip with a reason when the host does not expose the required capability.
 
 `api-stress-test/internal/ui/TestColorWriterFORCE_COLOR` is sensitive to an inherited `NO_COLOR`. Use `env -u NO_COLOR go test ./...` for the controlled full-module result, and report a separate plain `go test ./...` run when diagnosing the ambient environment.
 

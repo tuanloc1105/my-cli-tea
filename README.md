@@ -92,6 +92,8 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
 - Progress tracking for large directories
 - Customizable exclusions
 - Sort by size or name
+- Native allocated disk usage on macOS, Linux, and Windows; logical size remains available
+- Deterministic hardlink accounting, valid JSON output, and explicit partial-scan failures
 
 **Usage:**
 ```bash
@@ -106,7 +108,38 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
 
 # Sort by name
 ./check-folder-size -sort name -asc
+
+# Report apparent/logical bytes instead of allocated disk usage
+./check-folder-size --size-mode logical
+
+# Produce machine-readable output without progress or ANSI contamination
+./check-folder-size --json
 ```
+
+`--size-mode allocated` is the default. It uses native allocated bytes and includes
+the metadata blocks of displayed directories and their descendants; the scan
+root's own blocks are excluded so the reported total equals the sum of displayed
+items. `--size-mode logical` reports apparent file bytes and preserves the
+logical-size use case. Displayed units and `B`/`KB`/`MB`/`GB`/`TB` filters use
+binary multipliers (base 1024).
+
+Hidden names are scanned normally, including dot entries on POSIX and entries
+with the Windows hidden attribute. Nested symlinks and broken symlinks are
+measured as links and never followed; FIFO, socket, device, and other special
+entries are measured as their own metadata and reported as `other`. A root
+symlink to a directory is accepted as an input convenience.
+
+In allocated mode, observed regular-file hardlinks are counted once across the
+entire scan and attributed to the lexicographically smallest top-level path.
+Links outside the scanned tree cannot be discovered, and reflinks/filesystem
+clones may share physical extents even though they have distinct file identities.
+
+Successful JSON output is exactly one array (`[]` when empty). Warnings and
+explicit JSON progress go to stderr. Fatal validation/root-open errors and
+partial scans exit with status 1; partial scans still emit the data collected so
+far. Timeouts are cooperative: filesystem work checks cancellation frequently,
+but an operating-system `ReadDir` call already blocked in the kernel cannot be
+interrupted immediately.
 
 ### Find Content
 

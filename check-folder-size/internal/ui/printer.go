@@ -4,7 +4,6 @@ import (
 	"check-folder-size/internal/scanner"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 )
 
@@ -47,29 +46,11 @@ func formatSize(size int64) FormatResult {
 	return FormatResult{sizeFloat, units[unitIndex], msgColor}
 }
 
-// PrintResults displays the folder analysis results
-func PrintResults(writer io.Writer, items []scanner.ItemInfo, parentFolder, sortBy string, reverse bool) {
+// PrintResults displays pre-sorted folder analysis results.
+func PrintResults(writer io.Writer, items []scanner.ItemInfo, parentFolder string, sizeMode scanner.SizeMode) {
 	if len(items) == 0 {
-		fmt.Fprintln(writer, "No accessible folders or files found.")
+		fmt.Fprintf(writer, "No accessible folders or files found (%s size).\n", strings.ToLower(metricLabel(sizeMode)))
 		return
-	}
-
-	// Sort results
-	switch sortBy {
-	case "size":
-		sort.Slice(items, func(i, j int) bool {
-			if reverse {
-				return items[i].Size > items[j].Size
-			}
-			return items[i].Size < items[j].Size
-		})
-	case "name":
-		sort.Slice(items, func(i, j int) bool {
-			if reverse {
-				return strings.ToLower(items[i].Name) > strings.ToLower(items[j].Name)
-			}
-			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
-		})
 	}
 
 	// Calculate total size
@@ -82,7 +63,7 @@ func PrintResults(writer io.Writer, items []scanner.ItemInfo, parentFolder, sort
 	// Print header
 	fmt.Fprintf(writer, "\n%s\n", strings.Repeat("=", 80))
 	fmt.Fprintf(writer, "📁 Parent Folder: %s\n", parentFolder)
-	fmt.Fprintf(writer, "📊 Total Size: %.2f %s\n", totalFormatted.Size, color(totalFormatted.Unit, totalFormatted.Color))
+	fmt.Fprintf(writer, "📊 Total %s Size: %.2f %s\n", metricLabel(sizeMode), totalFormatted.Size, color(totalFormatted.Unit, totalFormatted.Color))
 	fmt.Fprintf(writer, "📈 Items Found: %d\n", len(items))
 	fmt.Fprintf(writer, "%s\n", strings.Repeat("=", 80))
 
@@ -110,4 +91,11 @@ func PrintResults(writer io.Writer, items []scanner.ItemInfo, parentFolder, sort
 	}
 
 	fmt.Fprintln(writer, strings.Repeat("-", 80))
+}
+
+func metricLabel(sizeMode scanner.SizeMode) string {
+	if sizeMode == scanner.SizeModeLogical {
+		return "Logical"
+	}
+	return "Allocated"
 }

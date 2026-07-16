@@ -16,7 +16,7 @@ This is a collection of six standalone Go CLI tools plus one shared module. Each
 | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | `api-stress-test/`   | HTTP load/stress tester. Current active project focus is high-concurrency correctness and performance. | `api-stress-test/cmd/root.go`, then `docs/agent/api-stress-test.md`              |
 | `case-converter/`    | Text case conversion CLI.                                                                              | `case-converter/cmd/root.go`, `case-converter/cmd/converter.go`                  |
-| `check-folder-size/` | Directory size analyzer with terminal and JSON output.                                                 | `check-folder-size/cmd/root.go`, `check-folder-size/internal/scanner/scanner.go` |
+| `check-folder-size/` | Directory size analyzer with terminal and JSON output.                                                 | `check-folder-size/cmd/root.go`, `check-folder-size/internal/scanner/`           |
 | `find-content/`      | Text search CLI with regex/plain, multiline, filtering, and listing modes.                             | `find-content/cmd/root.go`, `find-content/cmd/searcher.go`                       |
 | `find-everything/`   | File finder with pattern, size, type, progress, and large-result handling.                             | `find-everything/cmd/root.go`, `find-everything/internal/finder/finder.go`       |
 | `replace-text/`      | Streaming find/replace CLI with backups, dry-run, size limits, metadata preservation, and atomic writes. | `replace-text/cmd/root.go`, `replace-text/internal/replacer/`                    |
@@ -56,6 +56,7 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 - Changing `api-stress-test` HTTP behavior: read `api-stress-test/cmd/root.go`, `api-stress-test/internal/request/client.go`, and `api-stress-test/internal/request/ratelimiter.go`.
 - Changing `api-stress-test` metrics, percentiles, histograms, throughput, or high-concurrency behavior: read `api-stress-test/internal/stats/collector.go` and `docs/agent/api-stress-test.md`.
 - Changing filesystem traversal/search: read `check-folder-size/internal/scanner/scanner.go`, `find-content/cmd/searcher.go`, or `find-everything/internal/finder/` as appropriate.
+- Changing `check-folder-size` accounting or platform metadata: read `check-folder-size/internal/scanner/types.go`, `scanner.go`, `metadata.go`, the target `metadata_<os>.go`, and matching scanner tests; use `check-folder-size/go.mod` as the toolchain/dependency source of truth.
 - Changing `replace-text` flags, validation, output, or exit behavior: read `replace-text/cmd/root.go` and `replace-text/cmd/root_test.go`.
 - Changing `replace-text` traversal, streaming, size limits, backup/atomic-write behavior, or metadata preservation: read `replace-text/internal/replacer/processor.go`, `replace-text/internal/replacer/stream.go`, `replace-text/internal/replacer/metadata.go`, and their matching tests first.
 - Changing shared utilities: read `common-module/utils/`, then build/test every consumer that imports `common-module/utils`.

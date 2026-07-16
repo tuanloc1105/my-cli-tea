@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,57 +14,134 @@ import (
 	"golang.org/x/term"
 )
 
-// walkTask is a unit of work for the parallel walker.
-// Each directory discovered during the walk becomes a task.
 type walkTask struct {
-	dirPath      string // absolute path of the directory to read
-	topLevelName string // which top-level entry this size counts toward
-	currentDepth int    // depth relative to the top-level entry (for maxDepth)
+	dirPath      string
+	topLevelName string
+	currentDepth int
 }
 
-type ScanOptions struct {
-	ShowProgress   bool
-	ExcludeList    []string
-	Ctx            context.Context
-	MaxDepth       int // 0 = unlimited
-	ProgressWriter io.Writer
+type scannerFilesystem interface {
+	lookup(string) (entryMetadata, error)
+	allocatedSupported() bool
 }
 
-type ItemInfo struct {
-	Name string `json:"name"`
-	Size int64  `json:"size"`
-	Type string `json:"type"`
+type scanDependencies struct {
+	filesystem scannerFilesystem
+	readDir    func(string) ([]os.DirEntry, error)
 }
 
-type ScanResult struct {
-	Items        []ItemInfo
-	WarningCount int64
+type topLevelItem struct {
+	name  string
+	kind  ItemType
+	total *atomic.Int64
+}
+
+type warningTracker struct {
+	count atomic.Int64
+	mu    sync.Mutex
+	first string
+}
+
+func (tracker *warningTracker) add(path string, err error) {
+	tracker.count.Add(1)
+	tracker.mu.Lock()
+	if tracker.first == "" {
+		tracker.first = fmt.Sprintf("%s: %v", path, err)
+	}
+	tracker.mu.Unlock()
+}
+
+func (tracker *warningTracker) summary() string {
+	count := tracker.count.Load()
+	if count == 0 {
+		return ""
+	}
+	tracker.mu.Lock()
+	first := tracker.first
+	tracker.mu.Unlock()
+	return fmt.Sprintf("%d filesystem entries could not be scanned; first error: %s", count, first)
+}
+
+type hardlinkRecord struct {
+	owner string
+	size  int64
+}
+
+type hardlinkRegistry struct {
+	mu      sync.Mutex
+	records map[fileIdentity]hardlinkRecord
+	totals  map[string]*atomic.Int64
+}
+
+func newHardlinkRegistry(totals map[string]*atomic.Int64) *hardlinkRegistry {
+	return &hardlinkRegistry{
+		records: make(map[fileIdentity]hardlinkRecord),
+		totals:  totals,
+	}
+}
+
+func (registry *hardlinkRegistry) add(identity fileIdentity, owner string, size int64) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	record, exists := registry.records[identity]
+	if !exists {
+		if err := addSize(registry.totals[owner], size); err != nil {
+			return err
+		}
+		registry.records[identity] = hardlinkRecord{owner: owner, size: size}
+		return nil
+	}
+	if owner >= record.owner {
+		return nil
+	}
+	if err := addSize(registry.totals[owner], record.size); err != nil {
+		return err
+	}
+	registry.totals[record.owner].Add(-record.size)
+	record.owner = owner
+	registry.records[identity] = record
+	return nil
+}
+
+func addSize(total *atomic.Int64, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("negative size %d", size)
+	}
+	for {
+		current := total.Load()
+		if size > math.MaxInt64-current {
+			return fmt.Errorf("size overflow adding %d to %d", size, current)
+		}
+		if total.CompareAndSwap(current, current+size) {
+			return nil
+		}
+	}
 }
 
 type parallelWalker struct {
 	excludeMap map[string]struct{}
-	ctx        context.Context
-	maxDepth   int
+	opts       ScanOptions
+	deps       scanDependencies
 	numWorkers int
 
 	taskCh   chan walkTask
-	sizes    map[string]*int64 // topLevelName -> atomic size accumulator
-	taskWg   sync.WaitGroup    // tracks outstanding tasks (not goroutines)
-	workerWg sync.WaitGroup    // tracks worker goroutines
+	taskWg   sync.WaitGroup
+	workerWg sync.WaitGroup
 
-	warningCount int64 // atomic
+	totals    map[string]*atomic.Int64
+	hardlinks *hardlinkRegistry
+	warnings  *warningTracker
 
-	// Progress tracking
 	showProgress      bool
 	termWidth         int
 	totalTopLevel     int
-	completedTopLevel int64             // atomic
-	pendingTasks      map[string]*int64 // atomic per-top-level task counters
+	completedTopLevel atomic.Int64
+	pendingTasks      map[string]*atomic.Int64
 	progressMu        sync.Mutex
 	progressWriter    io.Writer
 }
 
-// getTerminalWidth returns the width of the terminal
 func getTerminalWidth(writer io.Writer) int {
 	file, ok := writer.(*os.File)
 	if ok {
@@ -74,266 +152,287 @@ func getTerminalWidth(writer io.Writer) int {
 	return 80
 }
 
-func newParallelWalker(excludeMap map[string]struct{}, opts ScanOptions, numWorkers, topLevelDirCount int) *parallelWalker {
+func newParallelWalker(
+	excludeMap map[string]struct{},
+	opts ScanOptions,
+	deps scanDependencies,
+	totals map[string]*atomic.Int64,
+	warnings *warningTracker,
+	topLevelCapacity int,
+) *parallelWalker {
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
 	bufSize := numWorkers * 4
 	if bufSize < 64 {
 		bufSize = 64
 	}
-
 	progressWriter := opts.ProgressWriter
 	if progressWriter == nil {
-		progressWriter = os.Stdout
+		progressWriter = io.Discard
 	}
-
-	pw := &parallelWalker{
+	walker := &parallelWalker{
 		excludeMap:     excludeMap,
-		ctx:            opts.Ctx,
-		maxDepth:       opts.MaxDepth,
+		opts:           opts,
+		deps:           deps,
 		numWorkers:     numWorkers,
 		taskCh:         make(chan walkTask, bufSize),
-		sizes:          make(map[string]*int64, topLevelDirCount),
+		totals:         totals,
+		hardlinks:      newHardlinkRegistry(totals),
+		warnings:       warnings,
 		showProgress:   opts.ShowProgress,
-		totalTopLevel:  topLevelDirCount,
-		pendingTasks:   make(map[string]*int64, topLevelDirCount),
+		pendingTasks:   make(map[string]*atomic.Int64, topLevelCapacity),
 		progressWriter: progressWriter,
 	}
-
 	if opts.ShowProgress {
-		pw.termWidth = getTerminalWidth(progressWriter)
+		walker.termWidth = getTerminalWidth(progressWriter)
 	}
-
-	return pw
+	return walker
 }
 
-// processDirectory reads one directory level and enqueues child directories as new tasks.
-func (pw *parallelWalker) processDirectory(task walkTask) {
-	if pw.ctx.Err() != nil {
+func (walker *parallelWalker) metric(metadata entryMetadata) int64 {
+	if walker.opts.SizeMode == SizeModeAllocated {
+		return metadata.allocatedSize
+	}
+	return metadata.logicalSize
+}
+
+func (walker *parallelWalker) addEntry(path, owner string, metadata entryMetadata) {
+	if walker.opts.SizeMode == SizeModeLogical && metadata.kind == ItemTypeDirectory {
 		return
 	}
-
-	entries, err := os.ReadDir(task.dirPath)
+	size := walker.metric(metadata)
+	var err error
+	if walker.opts.SizeMode == SizeModeAllocated && metadata.kind == ItemTypeFile && metadata.hasIdentity && metadata.linkCount > 1 {
+		err = walker.hardlinks.add(metadata.identity, owner, size)
+	} else {
+		err = addSize(walker.totals[owner], size)
+	}
 	if err != nil {
-		atomic.AddInt64(&pw.warningCount, 1)
+		walker.warnings.add(path, err)
+	}
+}
+
+func (walker *parallelWalker) processDirectory(task walkTask) {
+	if walker.opts.Ctx.Err() != nil {
 		return
 	}
-
-	sizePtr := pw.sizes[task.topLevelName]
+	entries, err := walker.deps.readDir(task.dirPath)
+	if err != nil {
+		walker.warnings.add(task.dirPath, err)
+		return
+	}
+	if walker.opts.Ctx.Err() != nil {
+		return
+	}
 
 	for _, entry := range entries {
-		// Exclusion check first: O(1) map lookup, skip entire subtrees early
-		if _, excluded := pw.excludeMap[entry.Name()]; excluded {
+		if walker.opts.Ctx.Err() != nil {
+			return
+		}
+		if _, excluded := walker.excludeMap[entry.Name()]; excluded {
 			continue
 		}
 
-		// Skip symlinks to avoid loops
-		if entry.Type()&os.ModeSymlink != 0 {
+		path := filepath.Join(task.dirPath, entry.Name())
+		metadata, err := walker.deps.filesystem.lookup(path)
+		if err != nil {
+			walker.warnings.add(path, err)
 			continue
 		}
-
-		if entry.IsDir() {
-			// Depth limit check
-			if pw.maxDepth > 0 && task.currentDepth+1 > pw.maxDepth {
-				continue
-			}
-
-			childTask := walkTask{
-				dirPath:      filepath.Join(task.dirPath, entry.Name()),
-				topLevelName: task.topLevelName,
-				currentDepth: task.currentDepth + 1,
-			}
-
-			pw.taskWg.Add(1)
-			if pw.showProgress {
-				atomic.AddInt64(pw.pendingTasks[task.topLevelName], 1)
-			}
-			pw.enqueueOrProcess(childTask)
-		} else {
-			info, err := entry.Info()
-			if err != nil {
-				atomic.AddInt64(&pw.warningCount, 1)
-				continue
-			}
-			atomic.AddInt64(sizePtr, info.Size())
+		if walker.opts.Ctx.Err() != nil {
+			return
 		}
+		walker.addEntry(path, task.topLevelName, metadata)
+
+		if metadata.kind != ItemTypeDirectory {
+			continue
+		}
+		childDepth := task.currentDepth + 1
+		if walker.opts.MaxDepth > 0 && childDepth > walker.opts.MaxDepth {
+			continue
+		}
+		childTask := walkTask{
+			dirPath:      path,
+			topLevelName: task.topLevelName,
+			currentDepth: childDepth,
+		}
+		walker.taskWg.Add(1)
+		if walker.showProgress {
+			walker.pendingTasks[task.topLevelName].Add(1)
+		}
+		walker.enqueueOrProcess(childTask)
 	}
 }
 
-// enqueueOrProcess tries to send the task to the channel.
-// If the channel is full, it processes inline to avoid deadlock.
-// The inline fallback may recurse if child directories also can't be enqueued,
-// but recursion depth is bounded by directory tree depth. On Linux (PATH_MAX=4096),
-// this means at most ~2048 levels deep, using ~1MB of stack — well within Go's
-// goroutine stack limit (1GB default).
-func (pw *parallelWalker) enqueueOrProcess(task walkTask) {
+func (walker *parallelWalker) enqueueOrProcess(task walkTask) {
+	if walker.opts.Ctx.Err() != nil {
+		walker.completeTask(task)
+		return
+	}
 	select {
-	case pw.taskCh <- task:
-		// Offloaded to another worker
+	case walker.taskCh <- task:
 	default:
-		// Channel full — process inline, then mark complete
-		pw.processDirectory(task)
-		pw.completeTask(task)
+		walker.processDirectory(task)
+		walker.completeTask(task)
 	}
 }
 
-// completeTask decrements the task counter and updates progress when a top-level entry finishes.
-func (pw *parallelWalker) completeTask(task walkTask) {
-	pw.taskWg.Done()
-
-	if pw.showProgress {
-		remaining := atomic.AddInt64(pw.pendingTasks[task.topLevelName], -1)
-		if remaining == 0 && pw.ctx.Err() == nil {
-			count := atomic.AddInt64(&pw.completedTopLevel, 1)
-			progressMsg := fmt.Sprintf("Processing %d/%d: %s", count, pw.totalTopLevel, task.topLevelName)
-
-			runes := []rune(progressMsg)
-			if len(runes) > pw.termWidth-1 {
-				progressMsg = string(runes[:pw.termWidth-4]) + "..."
-			}
-
-			paddedMsg := fmt.Sprintf("%-*s", pw.termWidth-1, progressMsg)
-			pw.progressMu.Lock()
-			fmt.Fprintf(pw.progressWriter, "\r%s", paddedMsg)
-			pw.progressMu.Unlock()
-		}
+func (walker *parallelWalker) completeTask(task walkTask) {
+	walker.taskWg.Done()
+	if !walker.showProgress {
+		return
 	}
+	remaining := walker.pendingTasks[task.topLevelName].Add(-1)
+	if remaining != 0 || walker.opts.Ctx.Err() != nil {
+		return
+	}
+
+	count := walker.completedTopLevel.Add(1)
+	progressMessage := fmt.Sprintf("Processing %d/%d: %s", count, walker.totalTopLevel, task.topLevelName)
+	runes := []rune(progressMessage)
+	if len(runes) > walker.termWidth-1 {
+		progressMessage = string(runes[:walker.termWidth-4]) + "..."
+	}
+	paddedMessage := fmt.Sprintf("%-*s", walker.termWidth-1, progressMessage)
+	walker.progressMu.Lock()
+	fmt.Fprintf(walker.progressWriter, "\r%s", paddedMessage)
+	walker.progressMu.Unlock()
 }
 
-// run starts workers, enqueues initial tasks, and blocks until all work is done.
-func (pw *parallelWalker) run(initialTasks []walkTask) {
-	// Pre-register all initial tasks in WaitGroup and pending counters
-	// BEFORE starting workers, so taskWg.Wait() can't return prematurely.
-	pw.taskWg.Add(len(initialTasks))
-	if pw.showProgress {
+func (walker *parallelWalker) run(initialTasks []walkTask) {
+	if len(initialTasks) == 0 {
+		return
+	}
+	walker.totalTopLevel = len(initialTasks)
+	walker.taskWg.Add(len(initialTasks))
+	if walker.showProgress {
 		for _, task := range initialTasks {
-			atomic.AddInt64(pw.pendingTasks[task.topLevelName], 1)
+			pending := &atomic.Int64{}
+			pending.Store(1)
+			walker.pendingTasks[task.topLevelName] = pending
 		}
 	}
-
-	// Start workers (they immediately begin consuming from taskCh)
-	for i := 0; i < pw.numWorkers; i++ {
-		pw.workerWg.Add(1)
+	for range walker.numWorkers {
+		walker.workerWg.Add(1)
 		go func() {
-			defer pw.workerWg.Done()
-			for task := range pw.taskCh {
-				if pw.ctx.Err() != nil {
-					// Drain without processing — still decrement counters
-					pw.completeTask(task)
-					continue
+			defer walker.workerWg.Done()
+			for task := range walker.taskCh {
+				if walker.opts.Ctx.Err() == nil {
+					walker.processDirectory(task)
 				}
-				pw.processDirectory(task)
-				pw.completeTask(task)
+				walker.completeTask(task)
 			}
 		}()
 	}
-
-	// Enqueue initial tasks in a goroutine (may block if buffer fills,
-	// but workers are already running and consuming, so no deadlock)
 	go func() {
 		for _, task := range initialTasks {
-			pw.taskCh <- task
+			walker.taskCh <- task
 		}
 	}()
-
-	// Closer goroutine: when all tasks are done, close the channel
 	go func() {
-		pw.taskWg.Wait()
-		close(pw.taskCh)
+		walker.taskWg.Wait()
+		close(walker.taskCh)
 	}()
-
-	// Block until all workers exit
-	pw.workerWg.Wait()
+	walker.workerWg.Wait()
+	if walker.showProgress {
+		fmt.Fprintln(walker.progressWriter)
+	}
 }
 
-// GetSizesOfSubfolders calculates sizes of immediate subfolders/files
-func GetSizesOfSubfolders(parentFolder string, opts ScanOptions) (ScanResult, error) {
+// ScanDirectory calculates sizes of the immediate entries in a directory.
+func ScanDirectory(parentFolder string, opts ScanOptions) (ScanResult, error) {
+	return scanDirectory(parentFolder, opts, scanDependencies{
+		filesystem: nativeFilesystem{},
+		readDir:    os.ReadDir,
+	})
+}
+
+func scanDirectory(parentFolder string, opts ScanOptions, deps scanDependencies) (ScanResult, error) {
+	result := newScanResult()
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
 	}
-
-	var items []ItemInfo
-
-	entries, err := os.ReadDir(parentFolder)
-	if err != nil {
-		return ScanResult{}, fmt.Errorf("accessing %s: %w", parentFolder, err)
+	if opts.SizeMode == "" {
+		opts.SizeMode = SizeModeLogical
+	}
+	if !opts.SizeMode.Valid() {
+		result.Status = ScanStatusFailed
+		return result, &ScanError{Kind: ErrorKindInvalidOptions, Path: parentFolder, Err: fmt.Errorf("invalid size mode %q", opts.SizeMode)}
+	}
+	if opts.SizeMode == SizeModeAllocated && !deps.filesystem.allocatedSupported() {
+		result.Status = ScanStatusFailed
+		return result, &ScanError{Kind: ErrorKindUnsupported, Path: parentFolder, Err: fmt.Errorf("allocated size is not supported on %s", runtime.GOOS)}
+	}
+	if err := opts.Ctx.Err(); err != nil {
+		result.Status = ScanStatusPartial
+		return result, &ScanError{Kind: ErrorKindCancelled, Path: parentFolder, Err: err}
 	}
 
-	// Build exclude map for O(1) lookup
-	excludeMap := make(map[string]struct{})
+	entries, err := deps.readDir(parentFolder)
+	if err != nil {
+		result.Status = ScanStatusFailed
+		return result, &ScanError{Kind: ErrorKindRootOpen, Path: parentFolder, Err: err}
+	}
+
+	excludeMap := make(map[string]struct{}, len(opts.ExcludeList))
 	for _, item := range opts.ExcludeList {
 		excludeMap[item] = struct{}{}
 	}
-
-	// Separate top-level files (stat directly) and directories (parallel walk)
-	var initialTasks []walkTask
-	var fileWarnings int64
+	totals := make(map[string]*atomic.Int64, len(entries))
+	warnings := &warningTracker{}
+	walker := newParallelWalker(excludeMap, opts, deps, totals, warnings, len(entries))
+	items := make([]topLevelItem, 0, len(entries))
+	initialTasks := make([]walkTask, 0, len(entries))
 
 	for _, entry := range entries {
+		if err := opts.Ctx.Err(); err != nil {
+			break
+		}
 		if _, excluded := excludeMap[entry.Name()]; excluded {
 			continue
 		}
-
-		fullPath := filepath.Join(parentFolder, entry.Name())
-
-		if entry.IsDir() {
+		path := filepath.Join(parentFolder, entry.Name())
+		metadata, err := deps.filesystem.lookup(path)
+		if err != nil {
+			warnings.add(path, err)
+			continue
+		}
+		if err := opts.Ctx.Err(); err != nil {
+			break
+		}
+		total := &atomic.Int64{}
+		totals[entry.Name()] = total
+		items = append(items, topLevelItem{name: entry.Name(), kind: metadata.kind, total: total})
+		walker.addEntry(path, entry.Name(), metadata)
+		if metadata.kind == ItemTypeDirectory {
 			initialTasks = append(initialTasks, walkTask{
-				dirPath:      fullPath,
+				dirPath:      path,
 				topLevelName: entry.Name(),
 				currentDepth: 0,
 			})
-		} else {
-			if info, err := os.Stat(fullPath); err == nil {
-				name := entry.Name()
-				items = append(items, ItemInfo{Name: name, Size: info.Size(), Type: "file"})
-			} else {
-				fileWarnings++
-			}
 		}
 	}
 
-	if len(initialTasks) == 0 {
-		result := ScanResult{Items: items, WarningCount: fileWarnings}
-		if err := opts.Ctx.Err(); err != nil {
-			return result, fmt.Errorf("scan cancelled: %w (partial results returned)", err)
-		}
-		return result, nil
+	walker.run(initialTasks)
+	for _, item := range items {
+		result.Items = append(result.Items, ItemInfo{Name: item.name, Size: item.total.Load(), Type: item.kind})
 	}
-
-	// Create parallel walker — NumCPU workers regardless of top-level count,
-	// because subdirectories become tasks that benefit from more workers.
-	numWorkers := runtime.NumCPU()
-	pw := newParallelWalker(excludeMap, opts, numWorkers, len(initialTasks))
-
-	// Allocate atomic size accumulators for each top-level directory
-	for _, task := range initialTasks {
-		size := int64(0)
-		pw.sizes[task.topLevelName] = &size
-		if opts.ShowProgress {
-			pending := int64(0)
-			pw.pendingTasks[task.topLevelName] = &pending
-		}
-	}
-
-	// Run the parallel walker (blocks until complete)
-	pw.run(initialTasks)
-
-	// Collect directory sizes into result
-	for name, sizePtr := range pw.sizes {
-		items = append(items, ItemInfo{Name: name, Size: atomic.LoadInt64(sizePtr), Type: "directory"})
-	}
-
-	if opts.ShowProgress {
-		fmt.Fprintln(pw.progressWriter)
-	}
-
-	totalWarnings := fileWarnings + atomic.LoadInt64(&pw.warningCount)
-
-	result := ScanResult{
-		Items:        items,
-		WarningCount: totalWarnings,
+	result.WarningCount = warnings.count.Load()
+	result.WarningSummary = warnings.summary()
+	if result.WarningCount > 0 {
+		result.Status = ScanStatusPartial
 	}
 	if err := opts.Ctx.Err(); err != nil {
-		return result, fmt.Errorf("scan cancelled: %w (partial results returned)", err)
+		result.Status = ScanStatusPartial
+		return result, &ScanError{Kind: ErrorKindCancelled, Path: parentFolder, Err: err}
 	}
-
 	return result, nil
+}
+
+// GetSizesOfSubfolders preserves the original logical-size API.
+func GetSizesOfSubfolders(parentFolder string, opts ScanOptions) (ScanResult, error) {
+	opts.SizeMode = SizeModeLogical
+	return ScanDirectory(parentFolder, opts)
 }
