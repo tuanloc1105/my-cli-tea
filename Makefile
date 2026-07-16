@@ -7,7 +7,6 @@ ifneq (,$(findstring MINGW,$(UNAME_S))$(findstring MSYS,$(UNAME_S)))
     EXT        = .exe
     INSTALL_DIR = $(DEV_KIT_LOCATION)/tool
     INSTALL     = mv -f
-    CASE_NAME   = case-converter
     CLEAN_CMD   = rm -f
     export TEMP := $(shell cygpath -w /tmp)
     export GOPATH := $(HOME)/go
@@ -18,7 +17,6 @@ else ifeq ($(UNAME_S),Darwin)
     EXT        =
     INSTALL_DIR = $(HOME)/dev-kit/tool
     INSTALL     = mv -f
-    CASE_NAME   = c
     CLEAN_CMD   = rm -f
 else
     GOOS       = linux
@@ -26,19 +24,14 @@ else
     EXT        =
     INSTALL_DIR = /usr/local/bin
     INSTALL     = sudo mv
-    CASE_NAME   = c
     CLEAN_CMD   = rm -f
 endif
 
 GOBUILD = CGO_ENABLED=0 GOOS=$(GOOS) $(if $(GOARCH),GOARCH=$(GOARCH)) go build -o
 
-.PHONY: all case-converter check-folder-size find-content find-everything replace-text api-stress-test clean
+.PHONY: all check-folder-size find-content find-everything replace-text api-stress-test clean
 
-all: case-converter check-folder-size find-content find-everything replace-text api-stress-test
-
-case-converter:
-	cd case-converter && $(GOBUILD) case-converter$(EXT) .
-	$(INSTALL) case-converter/case-converter$(EXT) $(INSTALL_DIR)/$(CASE_NAME)$(EXT)
+all: check-folder-size find-content find-everything replace-text api-stress-test
 
 check-folder-size:
 	cd check-folder-size && $(GOBUILD) check-folder-size$(EXT) .
@@ -61,4 +54,4 @@ api-stress-test:
 	$(INSTALL) api-stress-test/api-stress-test$(EXT) $(INSTALL_DIR)/api-stress-test$(EXT)
 
 clean:
-	$(CLEAN_CMD) */case-converter$(EXT) */check-folder-size$(EXT) */find-content$(EXT) */find-everything$(EXT) */replace-text$(EXT) */api-stress-test$(EXT)
+	$(CLEAN_CMD) */check-folder-size$(EXT) */find-content$(EXT) */find-everything$(EXT) */replace-text$(EXT) */api-stress-test$(EXT)

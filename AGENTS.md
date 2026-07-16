@@ -10,17 +10,16 @@
 
 ## Project Map
 
-This is a collection of six standalone Go CLI tools plus one shared module. Each tool has its own module and builds independently.
+This is a collection of five standalone Go CLI tools plus one shared module. Each tool has its own module and builds independently.
 
 | Area                   | Purpose                                                                                                | Read first                                                                           |
 | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | `api-stress-test/`   | HTTP load/stress tester. Current active project focus is high-concurrency correctness and performance. | `api-stress-test/cmd/root.go`, then `docs/agent/api-stress-test.md`              |
-| `case-converter/`    | Text case conversion CLI.                                                                              | `case-converter/cmd/root.go`, `case-converter/cmd/converter.go`                  |
 | `check-folder-size/` | Directory size analyzer with terminal and JSON output.                                                 | `check-folder-size/cmd/root.go`, `check-folder-size/internal/scanner/`           |
 | `find-content/`      | Deterministic bounded text search with hidden/special-file policies and directory listing.             | `find-content/cmd/root.go`, `find-content/internal/searcher/`                    |
 | `find-everything/`   | Bounded concurrent file finder with partial reports, TTY-safe output, and atomic large-result saves.   | `find-everything/cmd/root.go`, `find-everything/internal/finder/finder.go`       |
 | `replace-text/`      | Streaming find/replace CLI with backups, dry-run, size limits, metadata preservation, and atomic writes. | `replace-text/cmd/root.go`, `replace-text/internal/replacer/`                    |
-| `common-module/`     | Shared utilities used by `case-converter` and `check-folder-size`.                                    | `common-module/utils/`                                                             |
+| `common-module/`     | Shared utilities used by `check-folder-size`.                                                         | `common-module/utils/`                                                             |
 
 For detailed package routing, read `docs/agent/project-map.md`.
 

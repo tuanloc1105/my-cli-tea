@@ -6,7 +6,7 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 
 - `AGENTS.md` is the repository's agent guide; there is no `CLAUDE.md` source file.
 - There is no root Go module. Each tool has its own `go.mod`.
-- All six executable entrypoints are minimal wrappers; command construction, streams, errors, and invocation-local options live in each module's `cmd/root.go` as documented in `docs/agent/cli-conventions.md`.
+- All five executable entrypoints are minimal wrappers; command construction, streams, errors, and invocation-local options live in each module's `cmd/root.go` as documented in `docs/agent/cli-conventions.md`.
 - There is no `docs/agent/` history before this guide set.
 - There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI has GitHub and Gitea workflows for the modules listed under Operational Surfaces.
 - `.serena/` is local tooling metadata and is ignored by `.gitignore`; do not treat it as source.
@@ -16,7 +16,6 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 | Module | Layout | Purpose | First files |
 | --- | --- | --- | --- |
 | `api-stress-test/` | Modular Cobra CLI | HTTP load/stress testing | `cmd/root.go`, `internal/request/client.go`, `internal/stats/collector.go`, `internal/ui/output.go` |
-| `case-converter/` | Modular Cobra CLI | Text case conversion | `cmd/root.go`, `cmd/converter.go` |
 | `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/types.go`, `internal/scanner/scanner.go`, `internal/scanner/metadata.go`, `internal/ui/printer.go` |
 | `find-content/` | Modular Cobra CLI | Deterministic bounded text search and directory listing | `cmd/root.go`, `cmd/render.go`, `internal/searcher/searcher.go`, `internal/searcher/coordinator.go` |
 | `find-everything/` | Modular Cobra CLI | File finding and filtering | `cmd/root.go`, `internal/finder/finder.go`, `internal/finder/walker.go`, `internal/ui/display.go` |
@@ -25,15 +24,9 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 
 ## Shared Module Usage
 
-Only these modules currently require and replace `common-module`:
+Only `check-folder-size/go.mod` currently requires and replaces `common-module`.
 
-- `case-converter/go.mod`
-- `check-folder-size/go.mod`
-
-Only these source files currently import `common-module/utils`:
-
-- `case-converter/cmd/root.go`
-- `check-folder-size/cmd/root.go`
+Only `check-folder-size/cmd/root.go` currently imports `common-module/utils`.
 
 When changing `common-module/utils/`, verify all consumers, not just the shared module.
 
@@ -44,7 +37,6 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `api-stress-test/internal/ui/output.go` and `api-stress-test/internal/ui/progress.go`
 - `check-folder-size/cmd/root.go` owns JSON/progress stream routing, partial warnings, and exit behavior; `check-folder-size/internal/ui/printer.go` renders terminal results.
 - `find-everything/internal/ui/display.go`
-- `case-converter/cmd/converter.go`
 - `find-content/cmd/root.go` and `find-content/cmd/render.go`
 - `replace-text/cmd/root.go`
 

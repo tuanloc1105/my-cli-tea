@@ -12,8 +12,6 @@ Test files currently exist in:
 - `api-stress-test/internal/stats/collector_test.go`
 - `api-stress-test/internal/ui/output_test.go`
 - `api-stress-test/internal/ui/progress_test.go`
-- `case-converter/cmd/root_test.go`
-- `case-converter/cmd/converter_test.go`
 - `check-folder-size/cmd/root_test.go`
 - `check-folder-size/internal/scanner/engine_test.go`
 - `check-folder-size/internal/scanner/scanner_test.go`
@@ -57,7 +55,7 @@ The current fuzz target is:
 - `replace-text/internal/replacer/stream_fuzz_test.go`: `FuzzStreamReplace`
 - `find-content/internal/searcher/matcher_test.go`: `FuzzMatcher`
 
-`common-module/` is the only module without test files. Verify it through both importing consumers when shared utilities change.
+`common-module/` is the only module without test files. Verify it through `check-folder-size`, its importing consumer, when shared utilities change.
 
 ## Verification Matrix
 
@@ -68,7 +66,6 @@ The current fuzz target is:
 | `api-stress-test/internal/stats/` | `cd api-stress-test && go test ./internal/stats` |
 | `api-stress-test` stats performance | `cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem` |
 | `api-stress-test/internal/ui/` | `cd api-stress-test && env -u NO_COLOR go test ./internal/ui` |
-| `case-converter/cmd/` | `cd case-converter && go test ./cmd` |
 | `check-folder-size/cmd/` | `cd check-folder-size && go test ./cmd` |
 | `check-folder-size/internal/scanner/` | `cd check-folder-size && go test ./internal/scanner` |
 | `check-folder-size` accounting/concurrency | `cd check-folder-size && go test -race ./...` |
@@ -89,7 +86,7 @@ The current fuzz target is:
 | `replace-text` streaming replacement | `cd replace-text && go test ./internal/replacer -run '^$' -fuzz '^FuzzStreamReplace$' -fuzztime=10s` |
 | `replace-text` cross-platform CI | `.github/workflows/replace-text-ci.yml` runs test, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners |
 | Any module-wide change | `cd <tool-dir> && go test ./...` |
-| `common-module/utils/` | Test/build each importing consumer: `case-converter` and `check-folder-size` |
+| `common-module/utils/` | Test/build the importing consumer: `check-folder-size` |
 | Docs-only change | `git diff --check` plus path/link checks |
 
 ## Gaps To Consider
@@ -101,7 +98,7 @@ The current fuzz target is:
 
 ## Cobra Command Guidance
 
-All six CLIs have command-package tests for flags, streams, errors, exit codes, and fresh invocation state. Follow `docs/agent/cli-conventions.md` and include two sequential invocations with different flags whenever command state changes.
+All five CLIs have command-package tests for flags, streams, errors, exit codes, and fresh invocation state. Follow `docs/agent/cli-conventions.md` and include two sequential invocations with different flags whenever command state changes.
 
 `check-folder-size` scanner coverage includes allocated/logical accounting,
 directory blocks, hidden entries, symlinks, special entries, sparse files,

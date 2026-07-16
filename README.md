@@ -4,22 +4,19 @@ A collection of useful command-line tools written in Go, designed to enhance you
 
 ## 🛠️ Tools Included
 
-### 1. **Case Converter** (`case-converter/`)
-Convert text between various case formats with support for 14 different transformations including snake_case, camelCase, PascalCase, and more.
-
-### 2. **Check Folder Size** (`check-folder-size/`)
+### 1. **Check Folder Size** (`check-folder-size/`)
 Analyze folder sizes with colored output, progress tracking, and customizable exclusions. Perfect for identifying disk space usage.
 
-### 3. **Find Content** (`find-content/`)
+### 2. **Find Content** (`find-content/`)
 Search for text content within files using regex or plain text matching. Supports multiple file types and directory exclusions.
 
-### 4. **Find Everything** (`find-everything/`)
+### 3. **Find Everything** (`find-everything/`)
 Advanced file and directory finder with pattern matching, size filtering, and parallel processing for large directory trees.
 
-### 5. **Replace Text** (`replace-text/`)
+### 4. **Replace Text** (`replace-text/`)
 Find and replace UTF-8 text in files or directories with optional backups, dry-run analysis, and bounded-memory streaming.
 
-### 6. **API Stress Test** (`api-stress-test/`)
+### 5. **API Stress Test** (`api-stress-test/`)
 HTTP load and stress testing tool for APIs with performance metrics collection.
 
 ## 🚀 Quick Start
@@ -44,7 +41,6 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
 
 3. **Or build individual tools:**
    ```bash
-   make case-converter
    make check-folder-size
    make find-content
    make find-everything
@@ -55,33 +51,6 @@ HTTP load and stress testing tool for APIs with performance metrics collection.
    The Makefile supports both Linux and Windows (PowerShell 7 with MSYS2 `make`).
 
 ## 📖 Tool Documentation
-
-### Case Converter
-
-**Purpose:** Convert text between various case formats for programming and documentation.
-
-**Key Features:**
-- 14 different case formats (snake_case, camelCase, PascalCase, etc.)
-- Automatic detection of input format
-- Colored terminal output
-- File input support
-
-**Usage:**
-```bash
-# Basic conversion
-./case-converter "hello world"
-
-# From file
-./case-converter -f input.txt
-
-# Specific format only
-./case-converter "hello world" --format snake
-```
-
-**Supported Formats:**
-- `normal`, `upper`, `lower`, `capitalized`, `swapped`
-- `snake_case`, `kebab-case`, `camel_case`, `pascal_case`
-- `constant_case`, `title_case`, `dot_case`, `path_case`, `pascal_kebab`
 
 ### Check Folder Size
 
@@ -253,7 +222,6 @@ and `130` for cancellation.
 ## 🎯 Use Cases
 
 ### Development Workflow
-- **Case Converter:** Standardize variable names, file names, and documentation
 - **Find Content:** Search for function usage, API endpoints, or configuration values
 - **Replace Text:** Bulk refactoring, configuration updates, or text standardization
 
@@ -272,7 +240,6 @@ and `130` for cancellation.
 ### Project Structure
 ```
 my-cli/
-├── case-converter/     # Text case conversion tool
 ├── check-folder-size/  # Disk usage analyzer
 ├── find-content/       # Text search tool
 ├── find-everything/    # Advanced file finder
@@ -283,9 +250,9 @@ my-cli/
 ```
 
 ### Building from Source
-Each tool is self-contained with its own `go.mod` file. `case-converter` and
-`check-folder-size` reference `common-module` via a local `replace` directive;
-the other tools build independently.
+Each tool is self-contained with its own `go.mod` file. `check-folder-size`
+references `common-module` via a local `replace` directive; the other tools
+build independently.
 
 Use the Makefile to build and install:
 ```bash
@@ -305,17 +272,6 @@ All tools use:
 - **Standard library:** File operations, regex, unicode handling
 
 ## 📝 Examples
-
-### Case Conversion Workflow
-```bash
-# Convert API endpoint names
-./case-converter "user authentication endpoint" --format snake
-# Output: user_authentication_endpoint
-
-# Convert to PascalCase for class names
-./case-converter "database connection manager" --format pascal
-# Output: DatabaseConnectionManager
-```
 
 ### Disk Usage Analysis
 ```bash

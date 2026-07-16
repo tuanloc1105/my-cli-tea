@@ -1,6 +1,6 @@
 # Cobra CLI Conventions
 
-Use this contract for all six standalone CLI modules. `replace-text` is the
+Use this contract for all five standalone CLI modules. `replace-text` is the
 reference implementation. Keep each module independent; `common-module` must
 not depend on Cobra and must not contain a shared command factory.
 
@@ -69,7 +69,6 @@ stdout or print usage unless help was explicitly requested.
 
 | Module | Behavior that must remain unchanged |
 | --- | --- |
-| `case-converter` | File input takes precedence over positional input; `--format` takes precedence over `--all`; arbitrary positional arguments remain accepted and only `args[0]` is consumed; no input clears the screen, prints help, and exits 0; current line processing and conversion keys remain unchanged. |
 | `find-content` | Search accepts exactly `<directory> <keyword>`; list accepts canonical `--list <directory>` plus the deprecated two-argument form. Preserve deterministic relative-path ordering, exact nonnegative `--max-results`, CSV normalization, hidden/default-exclude policy, regular-file/NUL checks, and exit `0` match/list/help, `1` clean no-match, `2` usage/fatal/partial-error behavior. |
 | `check-folder-size` | Keep `cobra.MaximumNArgs(1)`, default path, size parsing, sorting, filtering, timeout, JSON formatting, progress text, and screen-clear policy. |
 | `find-everything` | Keep `cobra.ExactArgs(2)`, basename `*`/`?` matching, validated finite size bounds, exact combined result caps, large-result conflict/prompt handling, exit codes `0/1/2/130`, stdout/stderr separation, and ANSI/progress only on the corresponding TTY stream. |
