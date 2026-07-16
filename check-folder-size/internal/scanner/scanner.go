@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,10 +22,11 @@ type walkTask struct {
 }
 
 type ScanOptions struct {
-	ShowProgress bool
-	ExcludeList  []string
-	Ctx          context.Context
-	MaxDepth     int // 0 = unlimited
+	ShowProgress   bool
+	ExcludeList    []string
+	Ctx            context.Context
+	MaxDepth       int // 0 = unlimited
+	ProgressWriter io.Writer
 }
 
 type ItemInfo struct {
@@ -58,12 +60,16 @@ type parallelWalker struct {
 	completedTopLevel int64             // atomic
 	pendingTasks      map[string]*int64 // atomic per-top-level task counters
 	progressMu        sync.Mutex
+	progressWriter    io.Writer
 }
 
 // getTerminalWidth returns the width of the terminal
-func getTerminalWidth() int {
-	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
-		return width
+func getTerminalWidth(writer io.Writer) int {
+	file, ok := writer.(*os.File)
+	if ok {
+		if width, _, err := term.GetSize(int(file.Fd())); err == nil && width > 0 {
+			return width
+		}
 	}
 	return 80
 }
@@ -74,20 +80,26 @@ func newParallelWalker(excludeMap map[string]struct{}, opts ScanOptions, numWork
 		bufSize = 64
 	}
 
+	progressWriter := opts.ProgressWriter
+	if progressWriter == nil {
+		progressWriter = os.Stdout
+	}
+
 	pw := &parallelWalker{
-		excludeMap:    excludeMap,
-		ctx:           opts.Ctx,
-		maxDepth:      opts.MaxDepth,
-		numWorkers:    numWorkers,
-		taskCh:        make(chan walkTask, bufSize),
-		sizes:         make(map[string]*int64, topLevelDirCount),
-		showProgress:  opts.ShowProgress,
-		totalTopLevel: topLevelDirCount,
-		pendingTasks:  make(map[string]*int64, topLevelDirCount),
+		excludeMap:     excludeMap,
+		ctx:            opts.Ctx,
+		maxDepth:       opts.MaxDepth,
+		numWorkers:     numWorkers,
+		taskCh:         make(chan walkTask, bufSize),
+		sizes:          make(map[string]*int64, topLevelDirCount),
+		showProgress:   opts.ShowProgress,
+		totalTopLevel:  topLevelDirCount,
+		pendingTasks:   make(map[string]*int64, topLevelDirCount),
+		progressWriter: progressWriter,
 	}
 
 	if opts.ShowProgress {
-		pw.termWidth = getTerminalWidth()
+		pw.termWidth = getTerminalWidth(progressWriter)
 	}
 
 	return pw
@@ -180,7 +192,7 @@ func (pw *parallelWalker) completeTask(task walkTask) {
 
 			paddedMsg := fmt.Sprintf("%-*s", pw.termWidth-1, progressMsg)
 			pw.progressMu.Lock()
-			fmt.Printf("\r%s", paddedMsg)
+			fmt.Fprintf(pw.progressWriter, "\r%s", paddedMsg)
 			pw.progressMu.Unlock()
 		}
 	}
@@ -233,13 +245,16 @@ func (pw *parallelWalker) run(initialTasks []walkTask) {
 }
 
 // GetSizesOfSubfolders calculates sizes of immediate subfolders/files
-func GetSizesOfSubfolders(parentFolder string, opts ScanOptions) ScanResult {
+func GetSizesOfSubfolders(parentFolder string, opts ScanOptions) (ScanResult, error) {
+	if opts.Ctx == nil {
+		opts.Ctx = context.Background()
+	}
+
 	var items []ItemInfo
 
 	entries, err := os.ReadDir(parentFolder)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error accessing %s: %v\n", parentFolder, err)
-		return ScanResult{Items: items, WarningCount: 1}
+		return ScanResult{}, fmt.Errorf("accessing %s: %w", parentFolder, err)
 	}
 
 	// Build exclude map for O(1) lookup
@@ -276,7 +291,11 @@ func GetSizesOfSubfolders(parentFolder string, opts ScanOptions) ScanResult {
 	}
 
 	if len(initialTasks) == 0 {
-		return ScanResult{Items: items, WarningCount: fileWarnings}
+		result := ScanResult{Items: items, WarningCount: fileWarnings}
+		if err := opts.Ctx.Err(); err != nil {
+			return result, fmt.Errorf("scan cancelled: %w (partial results returned)", err)
+		}
+		return result, nil
 	}
 
 	// Create parallel walker — NumCPU workers regardless of top-level count,
@@ -303,17 +322,18 @@ func GetSizesOfSubfolders(parentFolder string, opts ScanOptions) ScanResult {
 	}
 
 	if opts.ShowProgress {
-		fmt.Println()
+		fmt.Fprintln(pw.progressWriter)
 	}
 
 	totalWarnings := fileWarnings + atomic.LoadInt64(&pw.warningCount)
 
-	if opts.Ctx.Err() != nil {
-		fmt.Fprintf(os.Stderr, "\nScan cancelled: %v (partial results returned)\n", opts.Ctx.Err())
-	}
-
-	return ScanResult{
+	result := ScanResult{
 		Items:        items,
 		WarningCount: totalWarnings,
 	}
+	if err := opts.Ctx.Err(); err != nil {
+		return result, fmt.Errorf("scan cancelled: %w (partial results returned)", err)
+	}
+
+	return result, nil
 }

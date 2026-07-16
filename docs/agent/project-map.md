@@ -1,11 +1,12 @@
 # Project Map
 
-Use this file when a task needs exact source routing. `CLAUDE.md` stays the concise index.
+Use this file when a task needs exact source routing. `AGENTS.md` stays the concise index and writable source of truth.
 
 ## Repository Shape
 
-- `AGENTS.md` is a symlink to `CLAUDE.md`; edit `CLAUDE.md` for agent guide changes.
+- `AGENTS.md` is the repository's agent guide; there is no `CLAUDE.md` source file.
 - There is no root Go module. Each tool has its own `go.mod`.
+- All six executable entrypoints are minimal wrappers; command construction, streams, errors, and invocation-local options live in each module's `cmd/root.go` as documented in `docs/agent/cli-conventions.md`.
 - There is no `docs/agent/` history before this guide set.
 - There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI is limited to the `replace-text` GitHub Actions workflow.
 - `.serena/` is local tooling metadata and is ignored by `.gitignore`; do not treat it as source.
@@ -15,9 +16,9 @@ Use this file when a task needs exact source routing. `CLAUDE.md` stays the conc
 | Module | Layout | Purpose | First files |
 | --- | --- | --- | --- |
 | `api-stress-test/` | Modular Cobra CLI | HTTP load/stress testing | `cmd/root.go`, `internal/request/client.go`, `internal/stats/collector.go`, `internal/ui/output.go` |
-| `case-converter/` | Single-file CLI | Text case conversion | `main.go` |
+| `case-converter/` | Modular Cobra CLI | Text case conversion | `cmd/root.go`, `cmd/converter.go` |
 | `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/scanner.go`, `internal/ui/printer.go` |
-| `find-content/` | CLI plus search helper | Text search and directory listing | `main.go`, `searcher.go` |
+| `find-content/` | Modular Cobra CLI | Text search and directory listing | `cmd/root.go`, `cmd/searcher.go` |
 | `find-everything/` | Modular Cobra CLI | File finding and filtering | `cmd/root.go`, `internal/finder/finder.go`, `internal/finder/walker.go`, `internal/ui/display.go` |
 | `replace-text/` | Modular Cobra CLI | Streaming find/replace with concurrent traversal and mutation safety | `cmd/root.go`, `internal/replacer/types.go`, `internal/replacer/processor.go`, `internal/replacer/stream.go`, `internal/replacer/metadata.go` |
 | `common-module/` | Shared module | Utility helpers | `utils/struct_utils.go`, `utils/system_command_executor.go` |
@@ -32,7 +33,7 @@ Only these modules currently require and replace `common-module`:
 
 Only these source files currently import `common-module/utils`:
 
-- `case-converter/main.go`
+- `case-converter/cmd/root.go`
 - `check-folder-size/cmd/root.go`
 - `find-everything/cmd/root.go`
 
@@ -45,8 +46,8 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `api-stress-test/internal/ui/output.go` and `api-stress-test/internal/ui/progress.go`
 - `check-folder-size/internal/ui/printer.go`
 - `find-everything/internal/ui/display.go`
-- `case-converter/main.go`
-- `find-content/main.go` and `find-content/searcher.go`
+- `case-converter/cmd/converter.go`
+- `find-content/cmd/root.go` and `find-content/cmd/searcher.go`
 - `replace-text/cmd/root.go`
 
 `README.md` is the main user-facing documentation surface for examples and installation notes.
@@ -57,7 +58,7 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 - `api-stress-test/internal/request/client.go` handles headers, form data, JSON/raw/file body input, `http.NewRequestWithContext`, response draining, expected status/body checks, and error normalization.
 - `replace-text/cmd/root.go` owns flags, argument handling, user-facing output, and exit codes.
 - `replace-text/internal/replacer/processor.go`, `stream.go`, and `metadata*.go` own traversal/concurrency, streaming UTF-8 replacement and size limits, backup/atomic commits, concurrent-change checks, and platform metadata preservation.
-- `find-content/searcher.go`, `find-everything/internal/finder/`, and `check-folder-size/internal/scanner/scanner.go` are the main filesystem traversal/read paths.
+- `find-content/cmd/searcher.go`, `find-everything/internal/finder/`, and `check-folder-size/internal/scanner/scanner.go` are the main filesystem traversal/read paths.
 - `find-everything/internal/ui/display.go` can save large result sets to a file.
 
 ## Operational Surfaces

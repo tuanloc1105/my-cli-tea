@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"bufio"
@@ -82,10 +82,24 @@ type FileSearcher struct {
 	textExtensions   map[string]bool
 	suppressWarnings bool
 	searchAll        bool
+	stdout           io.Writer
+	stderr           io.Writer
+	stderrMu         sync.Mutex
 }
 
-// NewFileSearcher creates a new FileSearcher instance
-func NewFileSearcher(caseSensitive, suppressWarnings, searchAll bool, fileExtensions, excludeDirs, excludeFiles []string) *FileSearcher {
+// NewFileSearcher creates a new FileSearcher instance.
+func NewFileSearcher(
+	caseSensitive, suppressWarnings, searchAll bool,
+	fileExtensions, excludeDirs, excludeFiles []string,
+	stdout, stderr io.Writer,
+) *FileSearcher {
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+
 	fs := &FileSearcher{
 		caseSensitive:    caseSensitive,
 		suppressWarnings: suppressWarnings,
@@ -94,6 +108,8 @@ func NewFileSearcher(caseSensitive, suppressWarnings, searchAll bool, fileExtens
 		excludeDirs:      make(map[string]bool),
 		excludeFiles:     make(map[string]bool),
 		textExtensions:   make(map[string]bool),
+		stdout:           stdout,
+		stderr:           stderr,
 	}
 
 	// Set default excluded directories
@@ -159,12 +175,18 @@ func (fs *FileSearcher) shouldSkipFile(fileName string) bool {
 	return fs.excludeFiles[fileName]
 }
 
+func (fs *FileSearcher) writeStderr(format string, args ...any) {
+	fs.stderrMu.Lock()
+	defer fs.stderrMu.Unlock()
+	fmt.Fprintf(fs.stderr, format, args...)
+}
+
 // searchInFile searches for keyword in a single file using a pre-compiled matcher
 func (fs *FileSearcher) searchInFile(filePath string, matcher *searchMatcher, multiline bool) []matchResult {
 	file, err := os.Open(filePath)
 	if err != nil {
 		if !fs.suppressWarnings {
-			fmt.Fprintf(os.Stderr, "Warning: Could not read %s: %v\n", filePath, err)
+			fs.writeStderr("Warning: Could not read %s: %v\n", filePath, err)
 		}
 		return nil
 	}
@@ -213,7 +235,7 @@ func (fs *FileSearcher) searchInFile(filePath string, matcher *searchMatcher, mu
 
 	if err := scanner.Err(); err != nil {
 		if !fs.suppressWarnings {
-			fmt.Fprintf(os.Stderr, "Warning: Error reading %s: %v\n", filePath, err)
+			fs.writeStderr("Warning: Error reading %s: %v\n", filePath, err)
 		}
 	}
 
@@ -225,7 +247,7 @@ func (fs *FileSearcher) searchInFileMultiline(filePath string, file *os.File, ma
 	contentBytes, err := io.ReadAll(file)
 	if err != nil {
 		if !fs.suppressWarnings {
-			fmt.Fprintf(os.Stderr, "Warning: Could not read %s: %v\n", filePath, err)
+			fs.writeStderr("Warning: Could not read %s: %v\n", filePath, err)
 		}
 		return nil
 	}
@@ -295,14 +317,14 @@ func (fs *FileSearcher) grepRecursive(rootDir, keyword string, useRegex, multili
 	info, err := os.Stat(rootDir)
 	if err != nil {
 		if !fs.suppressWarnings {
-			fmt.Fprintf(os.Stderr, "Error: Directory does not exist: %s\n", rootDir)
+			fs.writeStderr("Error: Directory does not exist: %s\n", rootDir)
 		}
 		return 0
 	}
 
 	if !info.IsDir() {
 		if !fs.suppressWarnings {
-			fmt.Fprintf(os.Stderr, "Error: Path is not a directory: %s\n", rootDir)
+			fs.writeStderr("Error: Path is not a directory: %s\n", rootDir)
 		}
 		return 0
 	}
@@ -310,12 +332,12 @@ func (fs *FileSearcher) grepRecursive(rootDir, keyword string, useRegex, multili
 	// Pre-compile search matcher once (regex + lowercase keyword)
 	matcher, err := newSearchMatcher(keyword, useRegex, fs.caseSensitive, multiline)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Invalid regex pattern: %v\n", err)
+		fs.writeStderr("Error: Invalid regex pattern: %v\n", err)
 		return 0
 	}
 
 	// Buffered output to reduce syscalls
-	out := bufio.NewWriterSize(os.Stdout, 64*1024)
+	out := bufio.NewWriterSize(fs.stdout, 64*1024)
 	defer out.Flush()
 
 	// Parallel search with worker pool
@@ -375,12 +397,12 @@ func (fs *FileSearcher) grepRecursive(rootDir, keyword string, useRegex, multili
 		if err != nil {
 			if os.IsPermission(err) {
 				if !fs.suppressWarnings {
-					fmt.Fprintf(os.Stderr, "Warning: Permission denied: %s\n", path)
+					fs.writeStderr("Warning: Permission denied: %s\n", path)
 				}
 				return nil
 			}
 			if !fs.suppressWarnings {
-				fmt.Fprintf(os.Stderr, "Warning: Error accessing %s: %v\n", path, err)
+				fs.writeStderr("Warning: Error accessing %s: %v\n", path, err)
 			}
 			return nil
 		}
@@ -417,7 +439,6 @@ func (fs *FileSearcher) grepRecursive(rootDir, keyword string, useRegex, multili
 func (fs *FileSearcher) listDirectoryContents(path string, showHidden bool) error {
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
@@ -441,7 +462,7 @@ func (fs *FileSearcher) listDirectoryContents(path string, showHidden bool) erro
 			sizeStr = fmt.Sprintf(" (%d bytes)", info.Size())
 		}
 
-		fmt.Printf("%10s %s%s\n", entryType, entry.Name(), sizeStr)
+		fmt.Fprintf(fs.stdout, "%10s %s%s\n", entryType, entry.Name(), sizeStr)
 	}
 
 	return nil

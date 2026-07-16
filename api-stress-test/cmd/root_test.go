@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -427,3 +429,232 @@ func TestRunStressTest_OutputFile(t *testing.T) {
 		t.Errorf("total = %d, want 5", output.Statistics.Total)
 	}
 }
+
+func TestCommandForwardsFlagsContextAndWriter(t *testing.T) {
+	ctx := context.WithValue(context.Background(), commandContextKey{}, "value")
+	var receivedContext context.Context
+	var received StressTestOptions
+	run := func(ctx context.Context, options StressTestOptions) error {
+		receivedContext = ctx
+		received = options
+		_, _ = options.Writer.Write([]byte("runner output\n"))
+		return nil
+	}
+
+	code, stdout, stderr := runCommand(t, ctx, []string{
+		"--url", "https://example.com/path",
+		"--method", "post",
+		"--requests", "7",
+		"--concurrency", "3",
+		"--timeout", "1.5",
+		"--headers", "X-Test:value;Accept:application/json",
+		"--body", `{"ok":true}`,
+		"--content-type", "application/custom",
+		"--rate", "2.5",
+		"--insecure",
+		"--disable-keepalive",
+		"--disable-redirects",
+		"--expect-status", "201",
+		"--expect-body", "ok",
+		"--warmup", "250ms",
+		"--output", "json",
+		"--output-file", "results.json",
+		"--proxy", "http://localhost:8080",
+		"ignored", "arguments",
+	}, run)
+
+	if code != 0 || stderr != "" {
+		t.Fatalf("exit/stderr = %d/%q, want 0/empty", code, stderr)
+	}
+	if stdout != "runner output\n" {
+		t.Fatalf("stdout = %q, want runner output", stdout)
+	}
+	if receivedContext.Value(commandContextKey{}) != "value" {
+		t.Fatal("runner did not receive command context")
+	}
+	if received.TargetURL != "https://example.com/path" || received.Method != "POST" {
+		t.Fatalf("target/method = %q/%q", received.TargetURL, received.Method)
+	}
+	if received.TotalRequests != 7 || received.Concurrency != 3 || received.Timeout != 1500*time.Millisecond {
+		t.Fatalf("load options = %+v", received)
+	}
+	if received.Headers["X-Test"] != "value" || received.Headers["Accept"] != "application/json" {
+		t.Fatalf("headers = %#v", received.Headers)
+	}
+	if string(received.Body) != `{"ok":true}` || received.ContentType != "application/custom" {
+		t.Fatalf("body/content type = %q/%q", received.Body, received.ContentType)
+	}
+	if received.Rate != 2.5 || received.OutputFormat != "json" || received.Warmup != 250*time.Millisecond {
+		t.Fatalf("rate/output/warmup = %+v", received)
+	}
+	if !received.Insecure || !received.DisableKeepalive || !received.DisableRedirects {
+		t.Fatalf("transport flags = %+v", received)
+	}
+	if received.ExpectStatus != 201 || received.ExpectBody != "ok" || received.OutputFile != "results.json" || received.Proxy != "http://localhost:8080" {
+		t.Fatalf("validation/output/proxy = %+v", received)
+	}
+}
+
+func TestCommandDefaultsFallbacksAndStateIsolation(t *testing.T) {
+	var received []StressTestOptions
+	run := func(_ context.Context, options StressTestOptions) error {
+		received = append(received, options)
+		return nil
+	}
+
+	code, _, stderr := runCommand(t, context.Background(), []string{
+		"--url", "http://example.com", "--method", "post", "--requests", "0", "--concurrency", "0", "--insecure", "--output", "json",
+	}, run)
+	if code != 0 || stderr != "" {
+		t.Fatalf("first exit/stderr = %d/%q", code, stderr)
+	}
+	code, _, stderr = runCommand(t, context.Background(), []string{"--url", "http://example.com"}, run)
+	if code != 0 || stderr != "" {
+		t.Fatalf("second exit/stderr = %d/%q", code, stderr)
+	}
+
+	if len(received) != 2 {
+		t.Fatalf("runner calls = %d, want 2", len(received))
+	}
+	if received[0].TotalRequests != 100 || received[0].Concurrency != 10 || received[0].Method != "POST" || !received[0].Insecure || received[0].OutputFormat != "json" {
+		t.Fatalf("fallback options = %+v", received[0])
+	}
+	if received[1].TotalRequests != 100 || received[1].Concurrency != 10 || received[1].Method != "GET" || received[1].Insecure || received[1].OutputFormat != "text" || received[1].Timeout != 5*time.Second {
+		t.Fatalf("default options leaked state = %+v", received[1])
+	}
+}
+
+func TestCommandHelpAndFlags(t *testing.T) {
+	called := false
+	run := func(context.Context, StressTestOptions) error {
+		called = true
+		return nil
+	}
+	code, stdout, stderr := runCommand(t, context.Background(), []string{"--help"}, run)
+	if code != 0 || stderr != "" {
+		t.Fatalf("exit/stderr = %d/%q, want 0/empty", code, stderr)
+	}
+	if called {
+		t.Fatal("runner called for help")
+	}
+	if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--output-file") {
+		t.Fatalf("help output = %q", stdout)
+	}
+
+	root := newRootCommand(run, &bytes.Buffer{}, &bytes.Buffer{})
+	for _, name := range []string{
+		"url", "method", "requests", "concurrency", "timeout", "headers", "data", "json-body", "json-file", "body", "file", "content-type",
+		"rate", "duration", "insecure", "disable-keepalive", "disable-redirects", "proxy", "expect-status", "expect-body", "warmup", "output", "output-file",
+	} {
+		if root.Flags().Lookup(name) == nil {
+			t.Errorf("missing flag --%s", name)
+		}
+	}
+}
+
+func TestCommandErrorsRenderOnceOnStderr(t *testing.T) {
+	originalArgs := os.Args
+	os.Args = []string{"host-process", "--host-only"}
+	t.Cleanup(func() { os.Args = originalArgs })
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing URL", args: nil, want: "required flag"},
+		{name: "invalid method", args: []string{"--url", "http://example.com", "--method", "bad"}, want: "unsupported HTTP method"},
+		{name: "invalid output", args: []string{"--url", "http://example.com", "--output", "yaml"}, want: "unsupported output format"},
+		{name: "invalid timeout", args: []string{"--url", "http://example.com", "--timeout", "0"}, want: "timeout must be positive"},
+		{name: "explicit zero rate", args: []string{"--url", "http://example.com", "--rate", "0"}, want: "rate must be positive"},
+		{name: "excessive concurrency", args: []string{"--url", "http://example.com", "--concurrency", "10001"}, want: "concurrency too high"},
+		{name: "invalid duration", args: []string{"--url", "http://example.com", "--duration", "bad"}, want: "invalid duration"},
+		{name: "invalid warmup", args: []string{"--url", "http://example.com", "--warmup", "bad"}, want: "invalid warmup duration"},
+		{name: "mutually exclusive body flags", args: []string{"--url", "http://example.com", "--body", "x", "--json-body", `{}`}, want: "none of the others"},
+		{name: "missing body file", args: []string{"--url", "http://example.com", "--file", filepath.Join(t.TempDir(), "missing")}, want: "preparing body"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			run := func(context.Context, StressTestOptions) error {
+				called = true
+				return nil
+			}
+			code, stdout, stderr := runCommand(t, context.Background(), tt.args, run)
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1", code)
+			}
+			if called {
+				t.Fatal("runner called for invalid command")
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want empty", stdout)
+			}
+			if strings.Count(stderr, "Error:") != 1 || !strings.Contains(stderr, tt.want) {
+				t.Fatalf("stderr = %q, want one error containing %q", stderr, tt.want)
+			}
+			if strings.Contains(stderr, "Usage:") {
+				t.Fatalf("stderr unexpectedly contains usage: %q", stderr)
+			}
+		})
+	}
+}
+
+func TestCommandRunnerErrorAndNilInputs(t *testing.T) {
+	run := func(context.Context, StressTestOptions) error {
+		return errors.New("stress failed")
+	}
+	code, stdout, stderr := runCommand(t, nil, []string{"--url", "http://example.com"}, run)
+	if code != 1 || stdout != "" || stderr != "Error: stress failed\n" {
+		t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+	if code := executeContext(nil, []string{"--url", "http://example.com"}, nil, nil, func(ctx context.Context, options StressTestOptions) error {
+		if ctx == nil || options.Writer == nil {
+			t.Fatal("nil context or writer reached runner")
+		}
+		return nil
+	}); code != 0 {
+		t.Fatalf("nil-input exit code = %d, want 0", code)
+	}
+}
+
+func TestRunStressTestUsesParentContext(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var output bytes.Buffer
+	err := runStressTest(ctx, StressTestOptions{
+		Writer:        &output,
+		TargetURL:     server.URL,
+		Method:        "GET",
+		TotalRequests: 100,
+		Concurrency:   2,
+		Timeout:       time.Second,
+		OutputFormat:  "text",
+	})
+	if err != nil {
+		t.Fatalf("runStressTest returned error: %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("requests = %d, want 0 after parent cancellation", requests.Load())
+	}
+	if !strings.Contains(output.String(), "No requests were executed.") {
+		t.Fatalf("output = %q, want cancellation summary", output.String())
+	}
+}
+
+func runCommand(t *testing.T, ctx context.Context, args []string, run runner) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := executeContext(ctx, args, &stdout, &stderr, run)
+	return code, stdout.String(), stderr.String()
+}
+
+type commandContextKey struct{}

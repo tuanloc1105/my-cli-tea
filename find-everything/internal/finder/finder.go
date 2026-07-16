@@ -3,6 +3,7 @@ package finder
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ type FinderOptions struct {
 	ShowProgress    bool
 	MaxResults      int
 	NoSort          bool
+	Context         context.Context
+	Writer          io.Writer
 }
 
 // FileFinder handles file and directory searching
@@ -45,6 +48,7 @@ type FileFinder struct {
 	fastMatch       func(string) bool
 	ctx             context.Context
 	cancel          context.CancelFunc
+	writer          io.Writer
 }
 
 func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, error) {
@@ -80,7 +84,15 @@ func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, e
 		fileTypes[strings.ToLower(ext)] = true
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	writer := opts.Writer
+	if writer == nil {
+		writer = os.Stdout
+	}
 	maxWorkers := opts.MaxWorkers
 	if maxWorkers <= 0 {
 		maxWorkers = 1
@@ -102,11 +114,12 @@ func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, e
 		showProgress:    opts.ShowProgress,
 		maxResults:      opts.MaxResults,
 		noSort:          opts.NoSort,
-		progressTracker: ui.NewProgressTracker(),
+		progressTracker: ui.NewProgressTracker(writer),
 		patternRegex:    patternRegex,
 		fastMatch:       fastMatch,
 		ctx:             ctx,
 		cancel:          cancel,
+		writer:          writer,
 	}, nil
 }
 
@@ -225,4 +238,3 @@ func buildFastMatcher(pattern string, caseSensitive bool) func(string) bool {
 
 	return nil // complex pattern, fallback to regex
 }
-

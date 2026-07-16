@@ -17,15 +17,17 @@ func (ff *FileFinder) FindFilesAndDirs() ([]types.FileResult, []string) {
 	defer ff.cancel()
 
 	if ff.showProgress {
-		fmt.Printf("%sStarting search...%s\n", ui.ColorOKBlue, ui.ColorEndC)
+		fmt.Fprintf(ff.writer, "%sStarting search...%s\n", ui.ColorOKBlue, ui.ColorEndC)
 	}
 
 	// Start progress updater goroutine
 	var progressTicker *time.Ticker
+	var progressWg sync.WaitGroup
 	if ff.showProgress {
 		progressTicker = time.NewTicker(100 * time.Millisecond)
-		defer progressTicker.Stop()
+		progressWg.Add(1)
 		go func() {
+			defer progressWg.Done()
 			for {
 				select {
 				case <-progressTicker.C:
@@ -114,13 +116,18 @@ func (ff *FileFinder) FindFilesAndDirs() ([]types.FileResult, []string) {
 
 	// Wait for all workers to finish
 	workerWg.Wait()
+	ff.cancel()
+	if progressTicker != nil {
+		progressTicker.Stop()
+	}
+	progressWg.Wait()
 
 	if ff.showProgress {
-		fmt.Println() // New line after progress
+		fmt.Fprintln(ff.writer) // New line after progress
 	}
 
 	if skipped := atomic.LoadInt64(&skippedDirs); skipped > 0 {
-		fmt.Printf("%sWarning: %d directories could not be read (permission denied or other errors)%s\n",
+		fmt.Fprintf(ff.writer, "%sWarning: %d directories could not be read (permission denied or other errors)%s\n",
 			ui.ColorWarning, skipped, ui.ColorEndC)
 	}
 

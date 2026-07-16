@@ -2,7 +2,6 @@ package ui
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -87,41 +86,47 @@ func TestPromptLargeResultsAction(t *testing.T) {
 
 func TestPrintResultsLargeDisplayActionPrintsDetails(t *testing.T) {
 	files := makeFileResults(101)
+	var output bytes.Buffer
 
-	output := captureStdout(t, func() error {
-		return PrintResults(files, nil, ResultsOutputOptions{
-			NoSort:             true,
-			LargeResultsAction: LargeResultsActionDisplay,
-		})
+	err := PrintResults(files, nil, ResultsOutputOptions{
+		NoSort:             true,
+		LargeResultsAction: LargeResultsActionDisplay,
+		Writer:             &output,
 	})
+	if err != nil {
+		t.Fatalf("PrintResults returned error: %v", err)
+	}
 
-	if !strings.Contains(output, "Total results: 101 (exceeds 100)") {
-		t.Fatalf("output does not contain total results summary:\n%s", output)
+	if !strings.Contains(output.String(), "Total results: 101 (exceeds 100)") {
+		t.Fatalf("output does not contain total results summary:\n%s", output.String())
 	}
-	if !strings.Contains(output, "Matching Files:") {
-		t.Fatalf("output does not contain matching files section:\n%s", output)
+	if !strings.Contains(output.String(), "Matching Files:") {
+		t.Fatalf("output does not contain matching files section:\n%s", output.String())
 	}
-	if !strings.Contains(output, "file-100.txt") {
-		t.Fatalf("output does not contain displayed result:\n%s", output)
+	if !strings.Contains(output.String(), "file-100.txt") {
+		t.Fatalf("output does not contain displayed result:\n%s", output.String())
 	}
-	if strings.Contains(output, "Results saved to:") {
-		t.Fatalf("display action unexpectedly saved results:\n%s", output)
+	if strings.Contains(output.String(), "Results saved to:") {
+		t.Fatalf("display action unexpectedly saved results:\n%s", output.String())
 	}
 }
 
 func TestPrintResultsLargeSaveUsesExplicitOutputPath(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "results.txt")
+	var output bytes.Buffer
 
-	output := captureStdout(t, func() error {
-		return PrintResults(makeFileResults(101), nil, ResultsOutputOptions{
-			NoSort:             true,
-			LargeResultsAction: LargeResultsActionSave,
-			OutputPath:         outputPath,
-		})
+	err := PrintResults(makeFileResults(101), nil, ResultsOutputOptions{
+		NoSort:             true,
+		LargeResultsAction: LargeResultsActionSave,
+		OutputPath:         outputPath,
+		Writer:             &output,
 	})
+	if err != nil {
+		t.Fatalf("PrintResults returned error: %v", err)
+	}
 
-	if !strings.Contains(output, "Results saved to: "+outputPath) {
-		t.Fatalf("output does not contain explicit saved path:\n%s", output)
+	if !strings.Contains(output.String(), "Results saved to: "+outputPath) {
+		t.Fatalf("output does not contain explicit saved path:\n%s", output.String())
 	}
 	contentBytes, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -135,16 +140,19 @@ func TestPrintResultsLargeSaveUsesExplicitOutputPath(t *testing.T) {
 func TestPrintResultsLargeAskNonInteractiveFallsBackToSave(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "results.txt")
 	var promptOutput bytes.Buffer
+	var output bytes.Buffer
 
-	captureStdout(t, func() error {
-		return PrintResults(makeFileResults(101), nil, ResultsOutputOptions{
-			NoSort:             true,
-			LargeResultsAction: LargeResultsActionAsk,
-			OutputPath:         outputPath,
-			PromptReader:       strings.NewReader("display\n"),
-			PromptWriter:       &promptOutput,
-		})
+	err := PrintResults(makeFileResults(101), nil, ResultsOutputOptions{
+		NoSort:             true,
+		LargeResultsAction: LargeResultsActionAsk,
+		OutputPath:         outputPath,
+		PromptReader:       strings.NewReader("display\n"),
+		PromptWriter:       &promptOutput,
+		Writer:             &output,
 	})
+	if err != nil {
+		t.Fatalf("PrintResults returned error: %v", err)
+	}
 
 	if !strings.Contains(promptOutput.String(), "Non-interactive terminal detected") {
 		t.Fatalf("prompt output does not contain non-interactive fallback message:\n%s", promptOutput.String())
@@ -152,34 +160,6 @@ func TestPrintResultsLargeAskNonInteractiveFallsBackToSave(t *testing.T) {
 	if _, err := os.Stat(outputPath); err != nil {
 		t.Fatalf("expected fallback save file: %v", err)
 	}
-}
-
-func captureStdout(t *testing.T, fn func() error) string {
-	t.Helper()
-
-	oldStdout := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("create stdout pipe: %v", err)
-	}
-
-	os.Stdout = writer
-	callErr := fn()
-	closeErr := writer.Close()
-	os.Stdout = oldStdout
-
-	output, readErr := io.ReadAll(reader)
-	if readErr != nil {
-		t.Fatalf("read stdout pipe: %v", readErr)
-	}
-	if closeErr != nil {
-		t.Fatalf("close stdout pipe: %v", closeErr)
-	}
-	if callErr != nil {
-		t.Fatalf("function returned error: %v", callErr)
-	}
-
-	return string(output)
 }
 
 func makeFileResults(count int) []types.FileResult {

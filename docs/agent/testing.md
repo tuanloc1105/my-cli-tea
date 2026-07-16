@@ -12,6 +12,13 @@ Test files currently exist in:
 - `api-stress-test/internal/stats/collector_test.go`
 - `api-stress-test/internal/ui/output_test.go`
 - `api-stress-test/internal/ui/progress_test.go`
+- `case-converter/cmd/root_test.go`
+- `case-converter/cmd/converter_test.go`
+- `check-folder-size/cmd/root_test.go`
+- `check-folder-size/internal/scanner/scanner_test.go`
+- `check-folder-size/internal/ui/printer_test.go`
+- `find-content/cmd/root_test.go`
+- `find-everything/cmd/root_test.go`
 - `find-everything/internal/ui/display_test.go`
 - `replace-text/cmd/root_test.go`
 - `replace-text/internal/replacer/metadata_test.go`
@@ -31,22 +38,22 @@ The current fuzz target is:
 
 - `replace-text/internal/replacer/stream_fuzz_test.go`: `FuzzStreamReplace`
 
-The other tools currently have no test files:
-
-- `case-converter/`
-- `check-folder-size/`
-- `common-module/`
-- `find-content/`
+`common-module/` is the only module without test files. Verify it through all three importing consumers when shared utilities change.
 
 ## Verification Matrix
 
 | Change area | Minimum check |
 | --- | --- |
-| `api-stress-test/cmd/` | `cd api-stress-test && go test ./cmd ./internal/...` |
+| `api-stress-test/cmd/` | `cd api-stress-test && env -u NO_COLOR go test ./cmd ./internal/...` |
 | `api-stress-test/internal/request/` | `cd api-stress-test && go test ./internal/request` |
 | `api-stress-test/internal/stats/` | `cd api-stress-test && go test ./internal/stats` |
 | `api-stress-test` stats performance | `cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem` |
-| `api-stress-test/internal/ui/` | `cd api-stress-test && go test ./internal/ui` |
+| `api-stress-test/internal/ui/` | `cd api-stress-test && env -u NO_COLOR go test ./internal/ui` |
+| `case-converter/cmd/` | `cd case-converter && go test ./cmd` |
+| `check-folder-size/cmd/` | `cd check-folder-size && go test ./cmd` |
+| `check-folder-size/internal/scanner/` | `cd check-folder-size && go test ./internal/scanner` |
+| `find-content/cmd/` | `cd find-content && go test ./cmd` |
+| `find-everything/cmd/` | `cd find-everything && go test ./cmd` |
 | `find-everything/internal/ui/` | `cd find-everything && go test ./internal/ui` |
 | `replace-text/cmd/` | `cd replace-text && go test ./cmd` |
 | `replace-text/internal/replacer/` | `cd replace-text && go test ./internal/replacer` |
@@ -59,10 +66,16 @@ The other tools currently have no test files:
 
 ## Gaps To Consider
 
-- Add focused tests when changing currently untested tools if behavior is non-trivial.
-- `find-content/searcher.go` deserves tests for regex, multiline, extension filtering, excluded dirs/files, and binary/text detection before search behavior changes.
-- `check-folder-size/internal/scanner/scanner.go` deserves tests for depth, excludes, timeout cancellation, warning counts, and JSON output before traversal changes.
-- `case-converter/main.go` deserves table tests for each supported output format before conversion logic changes.
+- Add focused tests for any newly introduced CLI behavior that is not covered by the command fixtures.
+- Extend `find-content/cmd/root_test.go` when changing concurrent result semantics; current tests intentionally do not assert result ordering.
+- Extend `check-folder-size/internal/scanner/scanner_test.go` for new traversal policies such as depth, exclusion, cancellation, or warning behavior.
+- Add direct `common-module/` tests if shared utilities gain behavior that cannot be characterized safely through consumers.
+
+## Cobra Command Guidance
+
+All six CLIs have command-package tests for flags, streams, errors, exit codes, and fresh invocation state. Follow `docs/agent/cli-conventions.md` and include two sequential invocations with different flags whenever command state changes.
+
+`api-stress-test/internal/ui/TestColorWriterFORCE_COLOR` is sensitive to an inherited `NO_COLOR`. Use `env -u NO_COLOR go test ./...` for the controlled full-module result, and report a separate plain `go test ./...` run when diagnosing the ambient environment.
 
 ## High-Concurrency Guidance
 

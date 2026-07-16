@@ -115,13 +115,56 @@ func TestCommandDefaults(t *testing.T) {
 	}
 }
 
+func TestCommandDoesNotLeakOptionsBetweenInvocations(t *testing.T) {
+	target := writeFixture(t, "unchanged")
+	var received []replacer.Options
+	run := func(_ context.Context, options replacer.Options, _ replacer.Reporter) (replacer.Summary, error) {
+		received = append(received, options)
+		return replacer.Summary{}, nil
+	}
+
+	firstArgs := []string{
+		"--backup", "--dry-run", "--literal",
+		"--max-size", "123", "--max-output-size", "456", "--max-workers", "2",
+		`\n`, `\t`, target,
+	}
+	if code, _, stderr := runCommand(t, firstArgs, run); code != 0 {
+		t.Fatalf("first exit code = %d, stderr = %q", code, stderr)
+	}
+	if code, _, stderr := runCommand(t, []string{`\n`, `\t`, target}, run); code != 0 {
+		t.Fatalf("second exit code = %d, stderr = %q", code, stderr)
+	}
+
+	if len(received) != 2 {
+		t.Fatalf("runner calls = %d, want 2", len(received))
+	}
+	first, second := received[0], received[1]
+	if !first.Backup || !first.DryRun || first.MaxInputSize != 123 || first.MaxOutputSize != 456 || first.Workers != 2 {
+		t.Fatalf("first options = %+v", first)
+	}
+	if string(first.Search) != `\n` || string(first.Replacement) != `\t` {
+		t.Fatalf("literal first arguments = %q/%q", first.Search, first.Replacement)
+	}
+	if second.Backup || second.DryRun || second.MaxInputSize != replacer.DefaultMaxInputSize || second.MaxOutputSize != 0 || second.Workers != defaultWorkers() {
+		t.Fatalf("second options leaked state = %+v", second)
+	}
+	if string(second.Search) != "\n" || string(second.Replacement) != "\t" {
+		t.Fatalf("second arguments did not use defaults = %q/%q", second.Search, second.Replacement)
+	}
+}
+
 func TestCommandRejectsInvalidUsageWithoutCallingRunner(t *testing.T) {
+	originalArgs := os.Args
+	os.Args = []string{"host-process", "--host-only"}
+	t.Cleanup(func() { os.Args = originalArgs })
+
 	target := writeFixture(t, "unchanged")
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
+		{name: "no arguments", args: nil, want: "accepts 3 arg(s)"},
 		{name: "too few arguments", args: []string{"old", "new"}, want: "accepts 3 arg(s)"},
 		{name: "empty old text", args: []string{"", "new", target}, want: "old-text must not be empty"},
 		{name: "negative max input", args: []string{"--max-size", "-1", "old", "new", target}, want: "--max-size must not be negative"},

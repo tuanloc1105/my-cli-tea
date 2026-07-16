@@ -45,6 +45,7 @@ type ResultsOutputOptions struct {
 	OutputPath         string
 	PromptReader       io.Reader
 	PromptWriter       io.Writer
+	Writer             io.Writer
 }
 
 // ProgressTracker tracks search progress
@@ -54,11 +55,16 @@ type ProgressTracker struct {
 	foundFiles    int64
 	foundDirs     int64
 	startTime     time.Time
+	writer        io.Writer
 }
 
-func NewProgressTracker() *ProgressTracker {
+func NewProgressTracker(writer io.Writer) *ProgressTracker {
+	if writer == nil {
+		writer = os.Stdout
+	}
 	return &ProgressTracker{
 		startTime: time.Now(),
+		writer:    writer,
 	}
 }
 
@@ -80,7 +86,7 @@ func (pt *ProgressTracker) PrintProgress() {
 	processedDirs := atomic.LoadInt64(&pt.processedDirs)
 	foundFiles := atomic.LoadInt64(&pt.foundFiles)
 	foundDirs := atomic.LoadInt64(&pt.foundDirs)
-	fmt.Printf("\r%sProcessed: %d | Found: %d files, %d dirs | Time: %.1fs%s",
+	fmt.Fprintf(pt.writer, "\r%sProcessed: %d | Found: %d files, %d dirs | Time: %.1fs%s",
 		ColorOKCyan, processedDirs, foundFiles, foundDirs, elapsed, ColorEndC)
 }
 
@@ -172,14 +178,15 @@ func SaveResultsToFile(files []types.FileResult, dirs []string, pattern, basePat
 
 func PrintResults(files []types.FileResult, dirs []string, options ResultsOutputOptions) error {
 	totalResults := len(files) + len(dirs)
+	writer := outputWriter(options)
 
 	if totalResults <= 100 {
-		printResultsSummary(len(files), len(dirs), totalResults, false)
-		printResultDetails(files, dirs, options.ShowDetails, options.NoSort)
+		printResultsSummary(writer, len(files), len(dirs), totalResults, false)
+		printResultDetails(writer, files, dirs, options.ShowDetails, options.NoSort)
 		return nil
 	}
 
-	printResultsSummary(len(files), len(dirs), totalResults, true)
+	printResultsSummary(writer, len(files), len(dirs), totalResults, true)
 
 	action := strings.ToLower(strings.TrimSpace(options.LargeResultsAction))
 	if action == "" {
@@ -191,7 +198,7 @@ func PrintResults(files []types.FileResult, dirs []string, options ResultsOutput
 	}
 
 	if action == LargeResultsActionDisplay {
-		printResultDetails(files, dirs, options.ShowDetails, options.NoSort)
+		printResultDetails(writer, files, dirs, options.ShowDetails, options.NoSort)
 		return nil
 	}
 
@@ -200,41 +207,48 @@ func PrintResults(files []types.FileResult, dirs []string, options ResultsOutput
 		return fmt.Errorf("save results: %w", err)
 	}
 
-	fmt.Printf("%sResults saved to: %s%s\n", ColorOKCyan, filename, ColorEndC)
+	fmt.Fprintf(writer, "%sResults saved to: %s%s\n", ColorOKCyan, filename, ColorEndC)
 	return nil
 }
 
-func printResultsSummary(filesCount, dirsCount, totalResults int, exceededLimit bool) {
-	fmt.Printf("\n%s%sSearch Results:%s\n", ColorBold, ColorHeader, ColorEndC)
-	fmt.Printf("%sFiles found: %d%s\n", ColorOKGreen, filesCount, ColorEndC)
-	fmt.Printf("%sDirectories found: %d%s\n", ColorOKBlue, dirsCount, ColorEndC)
+func printResultsSummary(writer io.Writer, filesCount, dirsCount, totalResults int, exceededLimit bool) {
+	fmt.Fprintf(writer, "\n%s%sSearch Results:%s\n", ColorBold, ColorHeader, ColorEndC)
+	fmt.Fprintf(writer, "%sFiles found: %d%s\n", ColorOKGreen, filesCount, ColorEndC)
+	fmt.Fprintf(writer, "%sDirectories found: %d%s\n", ColorOKBlue, dirsCount, ColorEndC)
 	if exceededLimit {
-		fmt.Printf("%sTotal results: %d (exceeds 100)%s\n", ColorWarning, totalResults, ColorEndC)
+		fmt.Fprintf(writer, "%sTotal results: %d (exceeds 100)%s\n", ColorWarning, totalResults, ColorEndC)
 	}
 }
 
-func printResultDetails(files []types.FileResult, dirs []string, showDetails bool, noSort bool) {
+func printResultDetails(writer io.Writer, files []types.FileResult, dirs []string, showDetails bool, noSort bool) {
 	if !noSort {
 		sortResults(files, dirs)
 	}
 
 	if len(files) > 0 {
-		fmt.Printf("\n%s%sMatching Files:%s\n", ColorBold, ColorOKGreen, ColorEndC)
+		fmt.Fprintf(writer, "\n%s%sMatching Files:%s\n", ColorBold, ColorOKGreen, ColorEndC)
 		for _, f := range files {
 			if showDetails {
-				fmt.Printf("  %s (%s)\n", f.Path, FormatSize(f.Size))
+				fmt.Fprintf(writer, "  %s (%s)\n", f.Path, FormatSize(f.Size))
 			} else {
-				fmt.Printf("  %s\n", f.Path)
+				fmt.Fprintf(writer, "  %s\n", f.Path)
 			}
 		}
 	}
 
 	if len(dirs) > 0 {
-		fmt.Printf("\n%s%sMatching Directories:%s\n", ColorBold, ColorOKBlue, ColorEndC)
+		fmt.Fprintf(writer, "\n%s%sMatching Directories:%s\n", ColorBold, ColorOKBlue, ColorEndC)
 		for _, dirPath := range dirs {
-			fmt.Printf("  %s\n", dirPath)
+			fmt.Fprintf(writer, "  %s\n", dirPath)
 		}
 	}
+}
+
+func outputWriter(options ResultsOutputOptions) io.Writer {
+	if options.Writer != nil {
+		return options.Writer
+	}
+	return os.Stdout
 }
 
 func promptReader(options ResultsOutputOptions) io.Reader {
@@ -248,7 +262,7 @@ func promptWriter(options ResultsOutputOptions) io.Writer {
 	if options.PromptWriter != nil {
 		return options.PromptWriter
 	}
-	return os.Stdout
+	return outputWriter(options)
 }
 
 func resolvePromptedLargeResultsAction(reader io.Reader, writer io.Writer) string {

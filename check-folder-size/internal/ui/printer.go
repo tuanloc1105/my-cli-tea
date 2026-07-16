@@ -3,6 +3,7 @@ package ui
 import (
 	"check-folder-size/internal/scanner"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -47,9 +48,9 @@ func formatSize(size int64) FormatResult {
 }
 
 // PrintResults displays the folder analysis results
-func PrintResults(items []scanner.ItemInfo, parentFolder, sortBy string, reverse bool) {
+func PrintResults(writer io.Writer, items []scanner.ItemInfo, parentFolder, sortBy string, reverse bool) {
 	if len(items) == 0 {
-		fmt.Println("No accessible folders or files found.")
+		fmt.Fprintln(writer, "No accessible folders or files found.")
 		return
 	}
 
@@ -79,17 +80,17 @@ func PrintResults(items []scanner.ItemInfo, parentFolder, sortBy string, reverse
 	totalFormatted := formatSize(totalSize)
 
 	// Print header
-	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
-	fmt.Printf("📁 Parent Folder: %s\n", parentFolder)
-	fmt.Printf("📊 Total Size: %.2f %s\n", totalFormatted.Size, color(totalFormatted.Unit, totalFormatted.Color))
-	fmt.Printf("📈 Items Found: %d\n", len(items))
-	fmt.Printf("%s\n", strings.Repeat("=", 80))
+	fmt.Fprintf(writer, "\n%s\n", strings.Repeat("=", 80))
+	fmt.Fprintf(writer, "📁 Parent Folder: %s\n", parentFolder)
+	fmt.Fprintf(writer, "📊 Total Size: %.2f %s\n", totalFormatted.Size, color(totalFormatted.Unit, totalFormatted.Color))
+	fmt.Fprintf(writer, "📈 Items Found: %d\n", len(items))
+	fmt.Fprintf(writer, "%s\n", strings.Repeat("=", 80))
 
 	// Print table header
 	const unitColWidth = 7 // max visible width: " bytes " = 7
 	const typeColWidth = 9 // "directory" = 9
-	fmt.Printf("%10s  %-*s  %-*s  %s\n", "Size", unitColWidth, "Unit", typeColWidth, "Type", "Name")
-	fmt.Printf("%10s  %-*s  %-*s  %s\n", "----", unitColWidth, "----", typeColWidth, "----", "----")
+	fmt.Fprintf(writer, "%10s  %-*s  %-*s  %s\n", "Size", unitColWidth, "Unit", typeColWidth, "Type", "Name")
+	fmt.Fprintf(writer, "%10s  %-*s  %-*s  %s\n", "----", unitColWidth, "----", typeColWidth, "----", "----")
 
 	// Print items
 	for _, item := range items {
@@ -105,8 +106,8 @@ func PrintResults(items []scanner.ItemInfo, parentFolder, sortBy string, reverse
 			padding = strings.Repeat(" ", padCount)
 		}
 
-		fmt.Printf("%s  %s%s  %-*s  %s\n", sizeStr, unitStr, padding, typeColWidth, item.Type, item.Name)
+		fmt.Fprintf(writer, "%s  %s%s  %-*s  %s\n", sizeStr, unitStr, padding, typeColWidth, item.Type, item.Name)
 	}
 
-	fmt.Println(strings.Repeat("-", 80))
+	fmt.Fprintln(writer, strings.Repeat("-", 80))
 }

@@ -25,7 +25,7 @@ cd <tool-dir> && go build -o <tool-name> .
 Build all CLI modules locally without using the install-oriented `Makefile`:
 
 ```bash
-bash -lc 'for d in api-stress-test case-converter check-folder-size find-content find-everything replace-text; do (cd "$d" && go build -o "$(basename "$d")" .); done'
+bash -lc 'for d in api-stress-test case-converter check-folder-size find-content find-everything replace-text; do (cd "$d" && go build -trimpath -o "/tmp/$d" .); done'
 ```
 
 The root `Makefile` uses `CGO_ENABLED=0` and platform-specific install paths. Prefer the local build loop when you only need compile verification.
@@ -62,8 +62,10 @@ cd <tool-dir> && go test ./...
 Test all modules:
 
 ```bash
-bash -lc 'for d in api-stress-test case-converter check-folder-size common-module find-content find-everything replace-text; do (cd "$d" && go test ./...); done'
+bash -lc 'for d in api-stress-test case-converter check-folder-size common-module find-content find-everything replace-text; do if [ "$d" = api-stress-test ]; then (cd "$d" && env -u NO_COLOR go test ./...); else (cd "$d" && go test ./...); fi; done'
 ```
+
+Run plain `cd api-stress-test && go test ./...` separately when checking the inherited environment. With `NO_COLOR=1`, the pre-existing `internal/ui/TestColorWriterFORCE_COLOR` isolation issue is expected; the controlled command above removes that variable.
 
 Run the focused benchmark currently present in the repo:
 
@@ -99,10 +101,16 @@ bash -lc 'for d in api-stress-test case-converter check-folder-size common-modul
 
 ## Focused Verification
 
-- `api-stress-test/` behavior: `cd api-stress-test && go test ./...`
+- Cobra lifecycle, flags, streams, or exit behavior: run the affected module's `go test ./cmd` and follow `docs/agent/cli-conventions.md`.
+- `api-stress-test/` behavior: `cd api-stress-test && env -u NO_COLOR go test ./...`
 - `api-stress-test/internal/stats/` performance or percentile changes: add `go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem`
 - `api-stress-test/internal/request/` request behavior: `cd api-stress-test && go test ./internal/request`
-- `api-stress-test/internal/ui/` output/progress behavior: `cd api-stress-test && go test ./internal/ui`
+- `api-stress-test/internal/ui/` output/progress behavior: `cd api-stress-test && env -u NO_COLOR go test ./internal/ui`
+- `case-converter/cmd/` conversion or CLI behavior: `cd case-converter && go test ./cmd`
+- `check-folder-size/cmd/` flags, output, timeout, or exit behavior: `cd check-folder-size && go test ./cmd`
+- `check-folder-size/internal/scanner/` traversal or progress behavior: `cd check-folder-size && go test ./internal/scanner`
+- `find-content/cmd/` search, listing, filters, or CLI behavior: `cd find-content && go test ./cmd`
+- `find-everything/cmd/` flags, validation, output routing, or exit behavior: `cd find-everything && go test ./cmd`
 - `find-everything/internal/ui/` large-result behavior: `cd find-everything && go test ./internal/ui`
 - `replace-text/cmd/` flags, validation, output, or exit behavior: `cd replace-text && go test ./cmd`
 - `replace-text/internal/replacer/` streaming, metadata, backup/rollback, cancellation, or worker behavior: `cd replace-text && go test ./internal/replacer`

@@ -40,6 +40,9 @@ func executeContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	if args == nil {
+		args = []string{}
+	}
 
 	root := newRootCommand(run, stdout, stderr)
 	root.SetArgs(args)
