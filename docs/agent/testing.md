@@ -52,7 +52,7 @@ The other tools currently have no test files:
 | `replace-text/internal/replacer/` | `cd replace-text && go test ./internal/replacer` |
 | `replace-text` concurrency or transaction behavior | `cd replace-text && go test -race ./...` |
 | `replace-text` streaming replacement | `cd replace-text && go test ./internal/replacer -run '^$' -fuzz '^FuzzStreamReplace$' -fuzztime=10s` |
-| `replace-text` cross-platform CI | `.gitea/workflows/replace-text-ci.yml` runs test, vet, and build checks on Linux, macOS, and Windows host runners |
+| `replace-text` cross-platform CI | `.github/workflows/replace-text-ci.yml` runs test, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners |
 | Any module-wide change | `cd <tool-dir> && go test ./...` |
 | `common-module/utils/` | Test/build each importing consumer: `case-converter`, `check-folder-size`, `find-everything` |
 | Docs-only change | `git diff --check` plus path/link checks |

@@ -7,7 +7,7 @@ Use this file when a task needs exact source routing. `CLAUDE.md` stays the conc
 - `AGENTS.md` is a symlink to `CLAUDE.md`; edit `CLAUDE.md` for agent guide changes.
 - There is no root Go module. Each tool has its own `go.mod`.
 - There is no `docs/agent/` history before this guide set.
-- There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI is limited to the `replace-text` Gitea Actions workflow.
+- There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI is limited to the `replace-text` GitHub Actions workflow.
 - `.serena/` is local tooling metadata and is ignored by `.gitignore`; do not treat it as source.
 
 ## Modules
@@ -64,6 +64,6 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
-- `.gitea/workflows/replace-text-ci.yml` runs `replace-text` tests, vet, and build checks on host runners labeled `linux`, `macos`, and `windows`.
+- `.github/workflows/replace-text-ci.yml` runs `replace-text` tests, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners.
 - No container files, deploy scripts, env templates, or release automation are present.
 - Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.

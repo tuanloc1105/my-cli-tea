@@ -2,9 +2,9 @@
 
 Run Go commands from an individual module unless the command explicitly loops over modules.
 
-## Gitea Actions CI
+## GitHub Actions CI
 
-`.gitea/workflows/replace-text-ci.yml` verifies `replace-text` on pushes, pull requests, and manual runs when the workflow or `replace-text/**` changes. Each platform job installs Go 1.24.4, then runs:
+`.github/workflows/replace-text-ci.yml` verifies `replace-text` on pushes, pull requests, and manual runs when the workflow or `replace-text/**` changes. GitHub provisions `ubuntu-latest`, `macos-latest`, and `windows-latest`; each job installs Go 1.24.4, then runs:
 
 ```bash
 go test ./...
@@ -12,13 +12,7 @@ go vet ./...
 go build -trimpath ./...
 ```
 
-The workflow requires host-mode Gitea Actions runners registered with these labels:
-
-- `linux:host`
-- `macos:host`
-- `windows:host`
-
-The value before `:host` is the workflow's `runs-on` label. The Windows job explicitly uses PowerShell; without all three matching runners, the corresponding jobs remain queued.
+The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`. This checkout keeps Gitea as its fetch source and uses multiple `origin` push URLs so one push updates both Gitea and GitHub. That dual-push configuration lives in local Git config; other clones must configure their own GitHub push destination.
 
 ## Local Build
 
