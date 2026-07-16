@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ func TestRunSingleFileModifyPreservesMetadata(t *testing.T) {
 	if err := os.Chtimes(path, wantTime, wantTime); err != nil {
 		t.Fatal(err)
 	}
+	wantMode := snapshotPathMetadata(t, path).mode.Perm()
 
 	var outcomes []Outcome
 	summary, err := Run(context.Background(), testOptions(path), ReporterFunc(func(outcome Outcome) {
@@ -40,8 +42,8 @@ func TestRunSingleFileModifyPreservesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o751 {
-		t.Fatalf("mode = %v, want 0751", info.Mode().Perm())
+	if info.Mode().Perm() != wantMode {
+		t.Fatalf("mode = %v, want %v", info.Mode().Perm(), wantMode)
 	}
 	if !info.ModTime().Equal(wantTime) {
 		t.Fatalf("mtime = %v, want %v", info.ModTime(), wantTime)
@@ -87,8 +89,11 @@ func TestRunDryRunCreatesNothingAndChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 || !info.ModTime().Equal(wantTime) {
-		t.Fatalf("metadata changed: mode=%v mtime=%v", info.Mode().Perm(), info.ModTime())
+	if info.Mode().Perm() != beforeMetadata.mode.Perm() {
+		t.Fatalf("mode = %v, want %v", info.Mode().Perm(), beforeMetadata.mode.Perm())
+	}
+	if !info.ModTime().Equal(wantTime) {
+		t.Fatalf("mtime = %v, want %v", info.ModTime(), wantTime)
 	}
 	assertNoTemps(t, dir)
 }
@@ -138,6 +143,7 @@ func TestRunBackupReplacesExistingBackupOnlyAfterItIsComplete(t *testing.T) {
 	backupPath := path + ".bak"
 	writeTestFile(t, path, "old", 0o640)
 	writeTestFile(t, backupPath, "previous backup", 0o600)
+	wantBackupMode := snapshotPathMetadata(t, path).mode.Perm()
 	options := testOptions(path)
 	options.Backup = true
 
@@ -161,8 +167,8 @@ func TestRunBackupReplacesExistingBackupOnlyAfterItIsComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if backupInfo.Mode().Perm() != 0o640 {
-		t.Fatalf("backup mode = %v, want 0640", backupInfo.Mode().Perm())
+	if backupInfo.Mode().Perm() != wantBackupMode {
+		t.Fatalf("backup mode = %v, want %v", backupInfo.Mode().Perm(), wantBackupMode)
 	}
 	assertNoTemps(t, dir)
 }
@@ -353,7 +359,12 @@ func TestRunSurfacesTraversalError(t *testing.T) {
 }
 
 func TestInjectedFailuresBeforeMainCommitPreserveSourceAndCleanTemps(t *testing.T) {
-	for _, stage := range []string{"create", "write", "sync", "close", "chown", "chmod", "chtimes", "rename"} {
+	stages := []string{"create", "write", "sync", "close", "rename"}
+	if runtime.GOOS != "windows" {
+		stages = append(stages, "chown", "chmod", "chtimes")
+	}
+
+	for _, stage := range stages {
 		t.Run(stage, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "file.txt")
@@ -369,6 +380,36 @@ func TestInjectedFailuresBeforeMainCommitPreserveSourceAndCleanTemps(t *testing.
 				t.Fatalf("summary = %+v", summary)
 			}
 			if got := readTestFile(t, path); got != "old" {
+				t.Fatalf("source = %q", got)
+			}
+			assertNoTemps(t, dir)
+		})
+	}
+}
+
+func TestWindowsMetadataFailuresAreBestEffort(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific metadata contract")
+	}
+
+	for _, stage := range []string{"chown", "chmod", "chtimes"} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "file.txt")
+			writeTestFile(t, path, "old", 0o600)
+			ops := &faultFileOps{
+				failStage: stage,
+				failErr:   errors.New("injected " + stage + " failure"),
+			}
+
+			summary, err := processor{ops: ops}.run(context.Background(), testOptions(path), nil)
+			if err != nil {
+				t.Fatalf("run returned best-effort metadata error: %v", err)
+			}
+			if summary.Modified != 1 || summary.Failed != 0 {
+				t.Fatalf("summary = %+v", summary)
+			}
+			if got := readTestFile(t, path); got != "new" {
 				t.Fatalf("source = %q", got)
 			}
 			assertNoTemps(t, dir)

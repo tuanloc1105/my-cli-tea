@@ -49,7 +49,10 @@ func TestSnapshotFileMetadataIdentityAndState(t *testing.T) {
 		t.Fatal("single-link file reported as hardlinked")
 	}
 
-	if err := os.Chmod(path, 0o600); err != nil {
+	// Removing every write bit also toggles Windows' read-only attribute, so
+	// this metadata change is observable on every supported platform.
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if err := os.Chmod(path, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	changedMode := snapshotPathMetadata(t, path)
