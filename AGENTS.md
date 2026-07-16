@@ -65,6 +65,11 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 
 ## Conventions And Guardrails
 
+- After every code change, update agent docs when the change affects knowledge future sessions need. Keep `AGENTS.md` token-efficient; put details in the relevant `docs/agent/` file and add read-on-demand routing.
+- Always communicate with users in the language they use. Do not reply in English unless the user's prompt is in English.
+- Golden rule: no workaround.
+- Treat any user request assessed as a breaking or large change as plan-first work: switch to Plan mode before implementation. If Plan mode is unavailable at runtime, stop immediately and ask the user whether to switch to Plan mode.
+- Code comments must be brief and concise; avoid long explanations.
 - Go version target is Go 1.24. Keep dependencies minimal; Cobra is the CLI framework used across tools.
 - Use standard Go formatting. Run `gofmt` or `gofmt -w` only on files you intentionally changed.
 - Error handling should use contextual `fmt.Errorf("...: %w", err)` where wrapping helps callers.
