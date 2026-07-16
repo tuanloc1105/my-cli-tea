@@ -74,11 +74,11 @@ The current fuzz target is:
 | `find-content/internal/searcher/` | `cd find-content && go test ./internal/searcher` |
 | `find-content` concurrency/order | `cd find-content && go test -race ./... && go test ./... -run 'Deterministic\|Ordering\|MaxResults\|Coordinator' -count=20` |
 | `find-content` matcher fuzz | `cd find-content && go test ./... -run '^$' -fuzz '^FuzzMatcher$' -fuzztime=10s` |
-| `find-content` cross-platform CI | `.gitea/workflows/find-content-ci.yml` runs native tests, vet, and builds on Ubuntu, macOS, and Windows; Linux also runs race and determinism gates |
+| `find-content` cross-platform CI | `.github/workflows/find-content-ci.yml` runs native tests, vet, and builds on Ubuntu, macOS, and Windows; Linux also runs race and determinism gates |
 | `find-everything/cmd/` | `cd find-everything && go test ./cmd` |
 | `find-everything/internal/finder/` | `cd find-everything && go test ./internal/finder` |
 | `find-everything` concurrency/cancellation | `cd find-everything && go test -race ./internal/finder -run 'Test.*(Limit|Queue|Cancel|Partial)' -count=20` |
-| `find-everything` cross-platform policies | `.gitea/workflows/find-everything.yml` runs native hidden and symlink tests on Ubuntu, macOS, and Windows |
+| `find-everything` cross-platform policies | `.github/workflows/find-everything-ci.yml` runs native hidden and symlink tests on Ubuntu, macOS, and Windows |
 | `find-everything/internal/ui/` | `cd find-everything && go test ./internal/ui` |
 | `replace-text/cmd/` | `cd replace-text && go test ./cmd` |
 | `replace-text/internal/replacer/` | `cd replace-text && go test ./internal/replacer` |
@@ -86,7 +86,7 @@ The current fuzz target is:
 | `replace-text` streaming replacement | `cd replace-text && go test ./internal/replacer -run '^$' -fuzz '^FuzzStreamReplace$' -fuzztime=10s` |
 | `replace-text` cross-platform CI | `.github/workflows/replace-text-ci.yml` runs test, vet, and build checks on GitHub-hosted Ubuntu, macOS, and Windows runners |
 | Any module-wide change | `cd <tool-dir> && go test ./...` |
-| `common-module/utils/` | Test/build the importing consumer: `check-folder-size` |
+| `common-module/utils/` | `.github/workflows/common-module-ci.yml` tests/builds the importing `check-folder-size` consumer on Ubuntu, macOS, and Windows |
 | Docs-only change | `git diff --check` plus path/link checks |
 
 ## Gaps To Consider

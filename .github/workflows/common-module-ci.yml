@@ -1,0 +1,47 @@
+name: common-module CI
+
+on:
+  push:
+    paths: ["common-module/**", ".github/workflows/common-module-ci.yml"]
+  pull_request:
+    paths: ["common-module/**", ".github/workflows/common-module-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: macOS, os: macos-latest }
+          - { name: Windows, os: windows-latest }
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Test shared module
+        working-directory: common-module
+        run: go test ./...
+      - name: Vet shared module
+        working-directory: common-module
+        run: go vet ./...
+      - name: Test check-folder-size consumer
+        working-directory: check-folder-size
+        run: go test ./...
+      - name: Build check-folder-size consumer
+        working-directory: check-folder-size
+        run: go build -trimpath ./...

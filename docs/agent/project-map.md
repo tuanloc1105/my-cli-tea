@@ -56,6 +56,6 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
-- `.github/workflows/replace-text-ci.yml` runs `replace-text` checks on GitHub-hosted Ubuntu, macOS, and Windows runners. `.gitea/workflows/find-content-ci.yml` runs native `find-content` checks on the same OS families plus Linux race/determinism gates; `.gitea/workflows/find-everything.yml` runs native hidden/symlink checks for `find-everything` plus Linux race coverage.
+- `.github/workflows/*-ci.yml` runs checks for `check-folder-size`, `common-module` and its consumer, `find-content`, `find-everything`, and `replace-text` on GitHub-hosted Ubuntu, macOS, and Windows runners. The existing Gitea workflows continue to cover `find-content` and `find-everything` on the same OS families.
 - No container files, deploy scripts, env templates, or release automation are present.
 - Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.

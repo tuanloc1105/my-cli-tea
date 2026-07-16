@@ -66,7 +66,7 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 - Changing `replace-text` traversal, streaming, size limits, backup/atomic-write behavior, or metadata preservation: read `replace-text/internal/replacer/processor.go`, `replace-text/internal/replacer/stream.go`, `replace-text/internal/replacer/metadata.go`, and their matching tests first.
 - Changing shared utilities: read `common-module/utils/`, then build/test every consumer that imports `common-module/utils`.
 - Changing tests or verification strategy: read `docs/agent/testing.md`.
-- Changing `replace-text` CI: read `.github/workflows/replace-text-ci.yml` and `docs/agent/workflows.md`.
+- Changing GitHub CI: read the affected `.github/workflows/*-ci.yml` file and `docs/agent/workflows.md`.
 - Changing build/install behavior: read `Makefile` and `docs/agent/workflows.md`.
 
 ## Conventions And Guardrails

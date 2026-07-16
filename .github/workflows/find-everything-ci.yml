@@ -1,0 +1,57 @@
+name: find-everything CI
+
+on:
+  push:
+    paths: ["find-everything/**", ".github/workflows/find-everything-ci.yml"]
+  pull_request:
+    paths: ["find-everything/**", ".github/workflows/find-everything-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            policy-tests: Test(HiddenEntriesAndHiddenBaseAreIncluded|UnixUnreadableDescendantProducesPartialResults|SymlinkPolicy)$
+          - name: macOS
+            os: macos-latest
+            policy-tests: Test(HiddenEntriesAndHiddenBaseAreIncluded|DarwinHiddenFlagIsIncluded|UnixUnreadableDescendantProducesPartialResults|SymlinkPolicy)$
+          - name: Windows
+            os: windows-latest
+            policy-tests: Test(HiddenEntriesAndHiddenBaseAreIncluded|WindowsHiddenAttributeIsIncluded|SymlinkPolicy)$
+    defaults:
+      run:
+        working-directory: find-everything
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Verify modules
+        run: go mod verify
+      - name: Test
+        run: go test ./...
+      - name: Test native finder policies
+        run: go test ./internal/finder -run '${{ matrix.policy-tests }}' -count=1
+      - name: Race test
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -trimpath ./...

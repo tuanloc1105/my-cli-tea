@@ -4,13 +4,11 @@ Run Go commands from an individual module unless the command explicitly loops ov
 
 ## GitHub Actions CI
 
-`.github/workflows/replace-text-ci.yml` verifies `replace-text` on pushes, pull requests, and manual runs when the workflow or `replace-text/**` changes. GitHub provisions `ubuntu-latest`, `macos-latest`, and `windows-latest`; each job installs Go 1.24.4, then runs:
+GitHub Actions workflows verify `check-folder-size`, `find-content`, `find-everything`, and `replace-text` on pushes, pull requests, and manual runs when their module or workflow changes. GitHub provisions `ubuntu-latest`, `macos-latest`, and `windows-latest`; each job installs Go 1.24.4, then runs module tests, vet, and a trimmed build.
 
-```bash
-go test ./...
-go vet ./...
-go build -trimpath ./...
-```
+`check-folder-size`, `find-content`, and `find-everything` also run the race detector on Linux. `find-content` repeats its determinism/result-cap tests on Linux, while `find-everything` runs native OS-specific hidden-entry and symlink policy tests on every platform.
+
+`.github/workflows/common-module-ci.yml` runs the shared module checks and tests/builds `check-folder-size`, its importing consumer, on all three operating systems.
 
 The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`. This checkout keeps Gitea as its fetch source and uses multiple `origin` push URLs so one push updates both Gitea and GitHub. That dual-push configuration lives in local Git config; other clones must configure their own GitHub push destination.
 

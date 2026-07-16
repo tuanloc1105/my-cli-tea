@@ -1,0 +1,47 @@
+name: check-folder-size CI
+
+on:
+  push:
+    paths: ["check-folder-size/**", "common-module/**", ".github/workflows/check-folder-size-ci.yml"]
+  pull_request:
+    paths: ["check-folder-size/**", "common-module/**", ".github/workflows/check-folder-size-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: macOS, os: macos-latest }
+          - { name: Windows, os: windows-latest }
+    defaults:
+      run:
+        working-directory: check-folder-size
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Test
+        run: go test ./...
+      - name: Race test
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -trimpath ./...
