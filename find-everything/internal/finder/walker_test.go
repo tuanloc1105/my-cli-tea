@@ -115,6 +115,7 @@ func TestFindPreservesRelativeAndAbsolutePathForms(t *testing.T) {
 	})
 
 	t.Run("relative", func(t *testing.T) {
+		t.Chdir(filepath.Dir(base))
 		workingDirectory, err := os.Getwd()
 		if err != nil {
 			t.Fatalf("Getwd(): %v", err)

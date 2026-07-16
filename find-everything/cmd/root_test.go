@@ -253,6 +253,29 @@ func TestCommandExitCodeSemanticsAndPriority(t *testing.T) {
 
 func TestCommandActualSearchAndRedirectedOutput(t *testing.T) {
 	directory := t.TempDir()
+	target := filepath.Join(directory, "match-name.txt")
+	if err := os.WriteFile(target, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runActualCommand(t, context.Background(), []string{"--no-progress", directory, "*.txt"})
+	if code != 0 || stderr != "" {
+		t.Fatalf("exit/stderr = %d/%q", code, stderr)
+	}
+	if !strings.Contains(stdout, target) || !strings.Contains(stdout, "Status: complete") {
+		t.Fatalf("stdout does not contain result: %q", stdout)
+	}
+	if strings.Contains(stdout+stderr, "\x1b[") || strings.Contains(stdout+stderr, "\r") || strings.Contains(stdout+stderr, "\033c") {
+		t.Fatalf("redirected output contains terminal controls: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestCommandActualSearchEscapesControlCharactersInPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain newline characters")
+	}
+
+	directory := t.TempDir()
 	target := filepath.Join(directory, "match\nname.txt")
 	if err := os.WriteFile(target, []byte("content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -262,11 +285,11 @@ func TestCommandActualSearchAndRedirectedOutput(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("exit/stderr = %d/%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"`+strings.ReplaceAll(target, "\n", `\n`)+`"`) || !strings.Contains(stdout, "Status: complete") {
+	if !strings.Contains(stdout, `"`+strings.ReplaceAll(target, "\n", `\n`)+`"`) {
 		t.Fatalf("stdout does not contain escaped result: %q", stdout)
 	}
-	if strings.Contains(stdout+stderr, "\x1b[") || strings.Contains(stdout+stderr, "\r") || strings.Contains(stdout+stderr, "\033c") {
-		t.Fatalf("redirected output contains terminal controls: stdout=%q stderr=%q", stdout, stderr)
+	if strings.Contains(stdout, target) {
+		t.Fatalf("stdout contains unescaped result: %q", stdout)
 	}
 }
 
