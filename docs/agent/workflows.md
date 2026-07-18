@@ -12,19 +12,9 @@ GitHub Actions workflows verify `api-stress-test`, `check-folder-size`, `find-co
 
 `.github/workflows/common-module-ci.yml` runs the shared module checks and tests/builds `check-folder-size`, its importing consumer, on all three operating systems.
 
-The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`. This checkout keeps Gitea as its fetch source and uses multiple `origin` push URLs so one push updates both Gitea and GitHub. That dual-push configuration lives in local Git config; other clones must configure their own GitHub push destination.
+The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`, and it is the only CI execution target. All workflow definitions belong under `.github/workflows/`; do not add `.gitea/workflows/` files or configure Gitea Actions for this repository.
 
-## Gitea Actions CI
-
-`.gitea/workflows/find-everything.yml` verifies `find-everything` on native
-`ubuntu-latest`, `macos-latest`, and `windows-latest` runners; use the module and workflow as the toolchain source of truth.
-Every job runs module verification, tests, vet, and build; Linux also runs the
-race detector. The native finder-policy step exercises the OS-specific hidden
-attribute tests and symlink contract. Windows runners must allow symlink
-creation through Developer Mode or `SeCreateSymbolicLinkPrivilege`; the test
-fails with that prerequisite instead of silently skipping.
-
-`.gitea/workflows/find-content-ci.yml` verifies `find-content` on Ubuntu, macOS, and Windows when the module or workflow changes. Every OS runs `go test ./...`, `go vet ./...`, and `go build -trimpath ./...`; Linux also runs the race detector and the repeated determinism/result-cap gate.
+Gitea remains the primary fetch/source remote at `https://gitea.com/tuanloc1105/my-cli`. This checkout uses multiple `origin` push URLs so one push updates both Gitea and the GitHub CI mirror. That dual-push configuration lives in local Git config; other clones must configure their own GitHub push destination.
 
 ## Local Build
 

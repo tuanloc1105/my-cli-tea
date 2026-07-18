@@ -8,7 +8,7 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 - There is no root Go module. Each tool has its own `go.mod`.
 - All five executable entrypoints are minimal wrappers; command construction, streams, errors, and invocation-local options live in each module's `cmd/root.go` as documented in `docs/agent/cli-conventions.md`.
 - There is no `docs/agent/` history before this guide set.
-- There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI has GitHub and Gitea workflows for the modules listed under Operational Surfaces.
+- There is no frontend, web app, backend server, database, migration system, container config, or deploy/IaC surface in the repo. CI runs only on the GitHub mirror for the modules listed under Operational Surfaces.
 - `.serena/` is local tooling metadata and is ignored by `.gitignore`; do not treat it as source.
 
 ## Modules
@@ -56,6 +56,6 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
-- `.github/workflows/*-ci.yml` runs checks for `api-stress-test`, `check-folder-size`, `common-module` and its consumer, `find-content`, `find-everything`, and `replace-text` on GitHub-hosted Ubuntu, macOS, and Windows runners. The existing Gitea workflows continue to cover `find-content` and `find-everything` on the same OS families.
+- `.github/workflows/*-ci.yml` runs checks for `api-stress-test`, `check-folder-size`, `common-module` and its consumer, `find-content`, `find-everything`, and `replace-text` on the GitHub mirror's hosted Ubuntu, macOS, and Windows runners. Gitea is the primary source remote only and has no CI workflow definitions.
 - No container files, deploy scripts, env templates, or release automation are present.
 - Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.

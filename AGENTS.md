@@ -7,6 +7,7 @@
 - Prefer Serena symbolic retrieval for Go source structure before broad source-file reads.
 - For repo edits, read current files first and keep changes surgical. Do not revert unrelated user changes.
 - This repo has no top-level `go.mod`; run Go commands from the individual module directory unless using an explicit loop.
+- CI runs only on the GitHub mirror through `.github/workflows/`; Gitea is the primary source remote and must not contain `.gitea/workflows/` CI definitions.
 
 ## Project Map
 
@@ -67,7 +68,7 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 - Changing `replace-text` traversal, streaming, size limits, backup/atomic-write behavior, or metadata preservation: read `replace-text/internal/replacer/processor.go`, `replace-text/internal/replacer/stream.go`, `replace-text/internal/replacer/metadata.go`, and their matching tests first.
 - Changing shared utilities: read `common-module/utils/`, then build/test every consumer that imports `common-module/utils`.
 - Changing tests or verification strategy: read `docs/agent/testing.md`.
-- Changing GitHub CI: read the affected `.github/workflows/*-ci.yml` file and `docs/agent/workflows.md`.
+- Changing CI or mirror behavior: read the affected `.github/workflows/*-ci.yml` file and `docs/agent/workflows.md`; do not add Gitea Actions workflows.
 - Changing build/install behavior: read `Makefile` and `docs/agent/workflows.md`.
 
 ## Conventions And Guardrails
