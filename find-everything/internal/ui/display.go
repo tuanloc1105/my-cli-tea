@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"find-everything/internal/types"
+
+	"golang.org/x/term"
 )
 
 // Colors for terminal output.
@@ -365,30 +367,75 @@ func resolvePromptedLargeResultsAction(reader io.Reader, writer io.Writer, inter
 	return promptLargeResultsAction(reader, writer)
 }
 
-func promptLargeResultsAction(reader io.Reader, writer io.Writer) (string, error) {
-	scanner := bufio.NewScanner(reader)
-	for attempt := 0; attempt < 3; attempt++ {
-		fmt.Fprint(writer, "Choose output: enter [s] to save to file or [d] to display in terminal: ")
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return "", fmt.Errorf("read output choice: %w", err)
+func promptLargeResultsAction(reader io.Reader, writer io.Writer) (action string, err error) {
+	restoreTerminal, err := enableSingleKeyInput(reader)
+	if err != nil {
+		return "", err
+	}
+	if restoreTerminal != nil {
+		defer func() {
+			if restoreErr := restoreTerminal(); restoreErr != nil && err == nil {
+				action = ""
+				err = fmt.Errorf("restore terminal: %w", restoreErr)
 			}
-			return LargeResultsActionSave, nil
+		}()
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		fmt.Fprint(writer, "Choose output: press [s] to save to file or [d] to display in terminal: ")
+		answer, readErr := readPromptChoice(reader)
+		if readErr != nil {
+			if readErr == io.EOF {
+				return LargeResultsActionSave, nil
+			}
+			return "", fmt.Errorf("read output choice: %w", readErr)
 		}
-		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
 
 		switch answer {
-		case "", "s", "save":
+		case "", "s":
 			fmt.Fprintln(writer)
 			return LargeResultsActionSave, nil
-		case "d", "display":
+		case "d":
 			fmt.Fprintln(writer)
 			return LargeResultsActionDisplay, nil
 		default:
-			fmt.Fprintln(writer, "\nInvalid choice. Please enter s or d.")
+			fmt.Fprintln(writer, "\nInvalid choice. Please press s or d.")
 		}
 	}
 	return LargeResultsActionSave, nil
+}
+
+func enableSingleKeyInput(reader io.Reader) (func() error, error) {
+	input, ok := reader.(*os.File)
+	if !ok || !term.IsTerminal(int(input.Fd())) {
+		return nil, nil
+	}
+
+	state, err := term.MakeRaw(int(input.Fd()))
+	if err != nil {
+		return nil, fmt.Errorf("enable single-key input: %w", err)
+	}
+	return func() error {
+		return term.Restore(int(input.Fd()), state)
+	}, nil
+}
+
+func readPromptChoice(reader io.Reader) (string, error) {
+	var buffer [1]byte
+	for {
+		n, err := reader.Read(buffer[:])
+		if n > 0 {
+			switch buffer[0] {
+			case '\r', '\n':
+				return "", nil
+			default:
+				return strings.ToLower(string(buffer[0])), nil
+			}
+		}
+		if err != nil {
+			return "", err
+		}
+	}
 }
 
 func sortResults(files []types.FileResult, dirs []string) {

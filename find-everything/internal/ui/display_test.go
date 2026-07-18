@@ -84,10 +84,10 @@ func TestPromptLargeResultsAction(t *testing.T) {
 		input string
 		want  string
 	}{
-		{name: "short save", input: "s\n", want: LargeResultsActionSave},
-		{name: "word save", input: "save\n", want: LargeResultsActionSave},
-		{name: "short display", input: "d\n", want: LargeResultsActionDisplay},
-		{name: "word display", input: "display\n", want: LargeResultsActionDisplay},
+		{name: "save", input: "s", want: LargeResultsActionSave},
+		{name: "uppercase save", input: "S", want: LargeResultsActionSave},
+		{name: "display", input: "d", want: LargeResultsActionDisplay},
+		{name: "uppercase display", input: "D", want: LargeResultsActionDisplay},
 		{name: "empty defaults save", input: "\n", want: LargeResultsActionSave},
 		{name: "invalid defaults save after attempts", input: "xyz", want: LargeResultsActionSave},
 	}
@@ -109,6 +109,19 @@ func TestPromptLargeResultsActionReturnsReadError(t *testing.T) {
 	_, err := promptLargeResultsAction(errorReader{err: sentinel}, io.Discard)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("error = %v, want %v", err, sentinel)
+	}
+}
+
+func TestPromptLargeResultsActionReturnsAfterOneValidKey(t *testing.T) {
+	sentinel := errors.New("unexpected second read")
+	reader := &singleKeyReader{key: 'd', secondReadErr: sentinel}
+
+	got, err := promptLargeResultsAction(reader, io.Discard)
+	if err != nil || got != LargeResultsActionDisplay {
+		t.Fatalf("promptLargeResultsAction() = %q, %v; want %q, nil", got, err, LargeResultsActionDisplay)
+	}
+	if reader.reads != 1 {
+		t.Fatalf("reader calls = %d, want 1", reader.reads)
 	}
 }
 
@@ -359,7 +372,7 @@ func TestPrintSearchResultsLargeAskUsesInjectedInteractiveIO(t *testing.T) {
 	err := PrintSearchResults(types.SearchResults{Files: makeFileResults(101)}, ResultsOutputOptions{
 		NoSort:             true,
 		LargeResultsAction: LargeResultsActionAsk,
-		PromptReader:       strings.NewReader("d\n"),
+		PromptReader:       strings.NewReader("d"),
 		PromptWriter:       &stderr,
 		PromptTTY:          true,
 		Stdout:             &stdout,
@@ -629,6 +642,21 @@ type errorReader struct {
 
 func (r errorReader) Read([]byte) (int, error) {
 	return 0, r.err
+}
+
+type singleKeyReader struct {
+	key           byte
+	secondReadErr error
+	reads         int
+}
+
+func (r *singleKeyReader) Read(buffer []byte) (int, error) {
+	r.reads++
+	if r.reads > 1 {
+		return 0, r.secondReadErr
+	}
+	buffer[0] = r.key
+	return 1, nil
 }
 
 func (f *writeErrorFile) Write([]byte) (int, error) {

@@ -71,12 +71,18 @@ stdout or print usage unless help was explicitly requested.
 | --- | --- |
 | `find-content` | Search accepts exactly `<directory> <keyword>`; list accepts canonical `--list <directory>` plus the deprecated two-argument form. Preserve deterministic relative-path ordering, exact nonnegative `--max-results`, CSV normalization, hidden/default-exclude policy, regular-file/NUL checks, and exit `0` match/list/help, `1` clean no-match, `2` usage/fatal/partial-error behavior. |
 | `check-folder-size` | Keep `cobra.MaximumNArgs(1)`, default path, size parsing, sorting, filtering, timeout, JSON formatting, progress text, and screen-clear policy. |
-| `find-everything` | Keep `cobra.ExactArgs(2)`, basename `*`/`?` matching, validated finite size bounds, exact combined result caps, large-result conflict/prompt handling, exit codes `0/1/2/130`, stdout/stderr separation, and ANSI/progress only on the corresponding TTY stream. |
+| `find-everything` | Keep `cobra.ExactArgs(2)`, basename `*`/`?` matching, validated finite size bounds, exact combined result caps, large-result conflict/prompt handling, exit codes `0/1/2/130`, stdout/stderr separation, and ANSI/progress only on the corresponding TTY stream. The interactive large-result prompt reads `s` or `d` as a single key without Enter and must restore terminal state; non-TTY input falls back to saving without prompting. |
 | `api-stress-test` | Continue accepting arbitrary positional arguments; retain every flag default, non-positive request/concurrency fallbacks, signal handling, warmup and worker shutdown behavior, progress/output formats, output-file behavior, and failure exit semantics. |
 | `replace-text` | Keep `cobra.ExactArgs(3)`, reporter behavior, escape handling, filesystem safety policies, and the existing exit contract. |
 
 Known product quirks listed above are compatibility requirements for this
 lifecycle work. Fix them only under a separate approved change.
+
+For `find-everything` prompt tests, do not rely only on a finite
+`strings.Reader("d")`: EOF lets line-oriented scanners return a token without a
+newline and can hide an Enter-required regression. Use a reader that fails on a
+second read, then perform a real TTY smoke test after changing raw-mode setup or
+restoration.
 
 ## Command Tests
 
