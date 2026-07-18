@@ -710,8 +710,10 @@ func TestExecuteRequestWithMatcher_DrainsFiveMiBAndReusesConnection(t *testing.T
 }
 
 func TestExecuteRequest_TimingIncludesDelayedBody(t *testing.T) {
+	const headerDelay = 40 * time.Millisecond
 	const bodyDelay = 80 * time.Millisecond
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(headerDelay)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 		time.Sleep(bodyDelay)
@@ -726,8 +728,8 @@ func TestExecuteRequest_TimingIncludesDelayedBody(t *testing.T) {
 	if !result.OK {
 		t.Fatalf("request failed: %s", result.Error)
 	}
-	if result.TTFB <= 0 {
-		t.Errorf("TTFB = %f, want > 0", result.TTFB)
+	if result.TTFB < (headerDelay / 2).Seconds() {
+		t.Errorf("TTFB = %f, expected delayed headers to affect TTFB", result.TTFB)
 	}
 	if result.Elapsed-result.TTFB < (bodyDelay / 2).Seconds() {
 		t.Errorf("elapsed=%f TTFB=%f, expected delayed body to affect total", result.Elapsed, result.TTFB)

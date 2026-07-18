@@ -116,7 +116,7 @@ skip with a reason when the host does not expose the required capability.
 
 `api-stress-test/internal/ui/TestColorWriterEnvironment/force_color` is sensitive to an inherited `NO_COLOR`, which intentionally takes precedence over `FORCE_COLOR`. Use `env -u NO_COLOR go test ./...` for the controlled full-module result, and report a separate plain `go test ./...` run when diagnosing the ambient environment.
 
-For cross-platform tests, assert POSIX permission bits only on non-Windows systems while keeping content and atomic-write checks active everywhere. Normalize checked-in text fixtures from CRLF to LF before exact golden comparisons so checkout line endings do not change test semantics.
+For cross-platform tests, assert POSIX permission bits only on non-Windows systems while keeping content and atomic-write checks active everywhere. Normalize checked-in text fixtures from CRLF to LF before exact golden comparisons so checkout line endings do not change test semantics. Timing tests that require positive TTFB must introduce a deliberate header delay instead of relying on incidental transport latency or host clock resolution.
 
 ## High-Concurrency Guidance
 
