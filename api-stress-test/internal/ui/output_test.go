@@ -177,6 +177,7 @@ func TestPrintJSONResultGoldenV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}
+	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
 	if !bytes.Equal(buf.Bytes(), want) {
 		t.Errorf("JSON output differs from golden\ngot:\n%s\nwant:\n%s", buf.Bytes(), want)
 	}
