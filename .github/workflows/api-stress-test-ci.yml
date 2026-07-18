@@ -1,0 +1,75 @@
+name: api-stress-test CI
+
+on:
+  push:
+    paths: ["api-stress-test/**", ".github/workflows/api-stress-test-ci.yml"]
+  pull_request:
+    paths: ["api-stress-test/**", ".github/workflows/api-stress-test-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+    defaults:
+      run:
+        working-directory: api-stress-test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.4"
+          cache: false
+      - name: Verify modules
+        run: go mod verify
+      - name: Test
+        run: go test ./...
+      - name: Race test
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+      - name: Repeat lifecycle and streaming semantics
+        if: matrix.os == 'ubuntu-latest'
+        run: >-
+          go test ./cmd ./internal/request
+          -run 'Test.*(Duration|Grace|Signal|Warmup|RateLimiter|Matcher|Truncated|ExactRequest)'
+          -count=20
+      - name: Allocation gates
+        if: matrix.os == 'ubuntu-latest'
+        run: go test ./... -run 'Test.*Allocations' -count=1
+      - name: Benchmarks
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: >-
+          go test ./... -run '^$'
+          -bench 'Benchmark(CollectorRecord|ResponseBodyStreaming|SchedulerIntegration)$'
+          -benchmem | tee benchmark.txt
+      - name: Upload benchmark output
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: api-stress-test-benchmarks
+          path: api-stress-test/benchmark.txt
+          if-no-files-found: error
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -trimpath ./...

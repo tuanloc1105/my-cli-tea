@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -457,6 +458,7 @@ func TestCommandForwardsFlagsContextAndWriter(t *testing.T) {
 		"--expect-status", "201",
 		"--expect-body", "ok",
 		"--warmup", "250ms",
+		"--shutdown-grace", "750ms",
 		"--output", "json",
 		"--output-file", "results.json",
 		"--proxy", "http://localhost:8080",
@@ -486,6 +488,9 @@ func TestCommandForwardsFlagsContextAndWriter(t *testing.T) {
 	}
 	if received.Rate != 2.5 || received.OutputFormat != "json" || received.Warmup != 250*time.Millisecond {
 		t.Fatalf("rate/output/warmup = %+v", received)
+	}
+	if received.ShutdownGrace == nil || *received.ShutdownGrace != 750*time.Millisecond {
+		t.Fatalf("shutdown grace = %v, want 750ms", received.ShutdownGrace)
 	}
 	if !received.Insecure || !received.DisableKeepalive || !received.DisableRedirects {
 		t.Fatalf("transport flags = %+v", received)
@@ -544,7 +549,7 @@ func TestCommandHelpAndFlags(t *testing.T) {
 	root := newRootCommand(run, &bytes.Buffer{}, &bytes.Buffer{})
 	for _, name := range []string{
 		"url", "method", "requests", "concurrency", "timeout", "headers", "data", "json-body", "json-file", "body", "file", "content-type",
-		"rate", "duration", "insecure", "disable-keepalive", "disable-redirects", "proxy", "expect-status", "expect-body", "warmup", "output", "output-file",
+		"rate", "duration", "insecure", "disable-keepalive", "disable-redirects", "proxy", "expect-status", "expect-body", "warmup", "shutdown-grace", "output", "output-file",
 	} {
 		if root.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag --%s", name)
@@ -566,10 +571,19 @@ func TestCommandErrorsRenderOnceOnStderr(t *testing.T) {
 		{name: "invalid method", args: []string{"--url", "http://example.com", "--method", "bad"}, want: "unsupported HTTP method"},
 		{name: "invalid output", args: []string{"--url", "http://example.com", "--output", "yaml"}, want: "unsupported output format"},
 		{name: "invalid timeout", args: []string{"--url", "http://example.com", "--timeout", "0"}, want: "timeout must be positive"},
+		{name: "non-finite timeout", args: []string{"--url", "http://example.com", "--timeout", "NaN"}, want: "timeout must be"},
+		{name: "sub-nanosecond timeout", args: []string{"--url", "http://example.com", "--timeout", "0.0000000001"}, want: "representable duration"},
 		{name: "explicit zero rate", args: []string{"--url", "http://example.com", "--rate", "0"}, want: "rate must be positive"},
+		{name: "excessive rate", args: []string{"--url", "http://example.com", "--rate", "1000000001"}, want: "unrepresentable interval"},
 		{name: "excessive concurrency", args: []string{"--url", "http://example.com", "--concurrency", "10001"}, want: "concurrency too high"},
 		{name: "invalid duration", args: []string{"--url", "http://example.com", "--duration", "bad"}, want: "invalid duration"},
+		{name: "zero duration", args: []string{"--url", "http://example.com", "--duration", "0s"}, want: "duration must be positive"},
 		{name: "invalid warmup", args: []string{"--url", "http://example.com", "--warmup", "bad"}, want: "invalid warmup duration"},
+		{name: "zero warmup", args: []string{"--url", "http://example.com", "--warmup", "0s"}, want: "warmup duration must be positive"},
+		{name: "negative shutdown grace", args: []string{"--url", "http://example.com", "--shutdown-grace", "-1s"}, want: "shutdown grace must not be negative"},
+		{name: "invalid expected status", args: []string{"--url", "http://example.com", "--expect-status", "99"}, want: "expected status"},
+		{name: "invalid proxy scheme", args: []string{"--url", "http://example.com", "--proxy", "ftp://proxy:21"}, want: "unsupported proxy URL scheme"},
+		{name: "proxy without host", args: []string{"--url", "http://example.com", "--proxy", "http:///path"}, want: "proxy URL must contain a host"},
 		{name: "mutually exclusive body flags", args: []string{"--url", "http://example.com", "--body", "x", "--json-body", `{}`}, want: "none of the others"},
 		{name: "missing body file", args: []string{"--url", "http://example.com", "--file", filepath.Join(t.TempDir(), "missing")}, want: "preparing body"},
 	}
@@ -619,6 +633,60 @@ func TestCommandRunnerErrorAndNilInputs(t *testing.T) {
 	}
 }
 
+func TestCommandAllowsExplicitZeroShutdownGrace(t *testing.T) {
+	var received StressTestOptions
+	code, _, stderr := runCommand(t, context.Background(), []string{
+		"--url", "http://example.com", "--shutdown-grace", "0s",
+	}, func(_ context.Context, opts StressTestOptions) error {
+		received = opts
+		return nil
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("exit/stderr = %d/%q", code, stderr)
+	}
+	if received.ShutdownGrace == nil || *received.ShutdownGrace != 0 {
+		t.Fatalf("shutdown grace = %v, want explicit zero", received.ShutdownGrace)
+	}
+}
+
+func TestNormalizeAndValidateDirectOptions(t *testing.T) {
+	opts := normalizeStressTestOptions(StressTestOptions{
+		TargetURL:     "http://example.com",
+		Method:        "get",
+		TotalRequests: 0,
+		Concurrency:   -1,
+		Timeout:       time.Second,
+		OutputFormat:  "text",
+	})
+	if opts.TotalRequests != 100 || opts.Concurrency != 10 || opts.Method != "GET" {
+		t.Fatalf("normalized options = %+v", opts)
+	}
+	if err := validateStressTestOptions(opts); err != nil {
+		t.Fatalf("validate normalized options: %v", err)
+	}
+
+	negative := -time.Second
+	tests := []struct {
+		name   string
+		mutate func(*StressTestOptions)
+	}{
+		{name: "negative duration", mutate: func(o *StressTestOptions) { o.Duration = -time.Second }},
+		{name: "negative warmup", mutate: func(o *StressTestOptions) { o.Warmup = -time.Second }},
+		{name: "negative grace", mutate: func(o *StressTestOptions) { o.ShutdownGrace = &negative }},
+		{name: "invalid status", mutate: func(o *StressTestOptions) { o.ExpectStatus = 1000 }},
+		{name: "invalid rate", mutate: func(o *StressTestOptions) { o.Rate = math.Inf(1) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			invalid := opts
+			tt.mutate(&invalid)
+			if err := validateStressTestOptions(invalid); err == nil {
+				t.Fatal("validation succeeded, want error")
+			}
+		})
+	}
+}
+
 func TestRunStressTestUsesParentContext(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -639,13 +707,14 @@ func TestRunStressTestUsesParentContext(t *testing.T) {
 		Timeout:       time.Second,
 		OutputFormat:  "text",
 	})
-	if err != nil {
-		t.Fatalf("runStressTest returned error: %v", err)
+	var termination *terminationError
+	if !errors.As(err, &termination) || termination.ExitCode() != 130 {
+		t.Fatalf("runStressTest error = %v, want parent-cancel exit 130", err)
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("requests = %d, want 0 after parent cancellation", requests.Load())
 	}
-	if !strings.Contains(output.String(), "No requests were executed.") {
+	if !strings.Contains(output.String(), "Completed             : 0") {
 		t.Fatalf("output = %q, want cancellation summary", output.String())
 	}
 }

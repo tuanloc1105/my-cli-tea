@@ -15,7 +15,7 @@ Use this file when a task needs exact source routing. `AGENTS.md` stays the conc
 
 | Module | Layout | Purpose | First files |
 | --- | --- | --- | --- |
-| `api-stress-test/` | Modular Cobra CLI | HTTP load/stress testing | `cmd/root.go`, `internal/request/client.go`, `internal/stats/collector.go`, `internal/ui/output.go` |
+| `api-stress-test/` | Modular Cobra CLI | HTTP load/stress testing | `cmd/root.go`, `cmd/lifecycle.go`, `cmd/report_file.go`, `cmd/report_rename_<os>.go`, `internal/request/client.go`, `internal/request/matcher.go`, `internal/stats/collector.go`, `internal/ui/output.go` |
 | `check-folder-size/` | Modular Cobra CLI | Directory size scanning | `cmd/root.go`, `internal/scanner/types.go`, `internal/scanner/scanner.go`, `internal/scanner/metadata.go`, `internal/ui/printer.go` |
 | `find-content/` | Modular Cobra CLI | Deterministic bounded text search and directory listing | `cmd/root.go`, `cmd/render.go`, `internal/searcher/searcher.go`, `internal/searcher/coordinator.go` |
 | `find-everything/` | Modular Cobra CLI | File finding and filtering | `cmd/root.go`, `internal/finder/finder.go`, `internal/finder/walker.go`, `internal/ui/display.go` |
@@ -44,8 +44,8 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 ## Data And Side-Effect Paths
 
-- `api-stress-test/cmd/root.go` creates HTTP client/transport behavior, proxy/TLS/redirect/keepalive options, worker fan-out, duration mode, warmup, and output-file handling.
-- `api-stress-test/internal/request/client.go` handles headers, form data, JSON/raw/file body input, `http.NewRequestWithContext`, response draining, expected status/body checks, and error normalization.
+- `api-stress-test/cmd/root.go` owns flags, normalization, validation, command construction, and exit-code adaptation; `cmd/lifecycle.go` owns transport, warmup, request scheduling, duration/signal drain, TTY coordination, and report assembly; `cmd/report_file.go` plus `cmd/report_rename_<os>.go` own atomic report replacement across platforms.
+- `api-stress-test/internal/request/client.go` handles headers, form data, JSON/raw/file body input, `http.NewRequestWithContext`, streaming response accounting, timing, expectations, and structured errors; `matcher.go` owns reusable cross-chunk body matching.
 - `replace-text/cmd/root.go` owns flags, argument handling, user-facing output, and exit codes.
 - `replace-text/internal/replacer/processor.go`, `stream.go`, and `metadata*.go` own traversal/concurrency, streaming UTF-8 replacement and size limits, backup/atomic commits, concurrent-change checks, and platform metadata preservation.
 - `check-folder-size/internal/scanner/types.go` defines scan/result contracts; `scanner.go` owns traversal, concurrency, cancellation, partial results, exclusions, and symlink/hardlink aggregation; `metadata.go` plus `metadata_<os>.go` own logical/allocated metadata and stable file identity.
@@ -56,6 +56,6 @@ There is no browser frontend. The product surface is CLI terminal output and JSO
 
 - `Makefile` is the build/install/clean entrypoint. Its targets install or move binaries outside the repo.
 - Module metadata lives in each module's `go.mod` and `go.sum`.
-- `.github/workflows/*-ci.yml` runs checks for `check-folder-size`, `common-module` and its consumer, `find-content`, `find-everything`, and `replace-text` on GitHub-hosted Ubuntu, macOS, and Windows runners. The existing Gitea workflows continue to cover `find-content` and `find-everything` on the same OS families.
+- `.github/workflows/*-ci.yml` runs checks for `api-stress-test`, `check-folder-size`, `common-module` and its consumer, `find-content`, `find-everything`, and `replace-text` on GitHub-hosted Ubuntu, macOS, and Windows runners. The existing Gitea workflows continue to cover `find-content` and `find-everything` on the same OS families.
 - No container files, deploy scripts, env templates, or release automation are present.
 - Root `.gitignore` ignores `/plans/` only. Build and test artifacts should be written outside the repository, such as under `/tmp`.

@@ -4,9 +4,11 @@ Run Go commands from an individual module unless the command explicitly loops ov
 
 ## GitHub Actions CI
 
-GitHub Actions workflows verify `check-folder-size`, `find-content`, `find-everything`, and `replace-text` on pushes, pull requests, and manual runs when their module or workflow changes. GitHub provisions `ubuntu-latest`, `macos-latest`, and `windows-latest`; each job installs Go 1.24.4, then runs module tests, vet, and a trimmed build.
+GitHub Actions workflows verify `api-stress-test`, `check-folder-size`, `find-content`, `find-everything`, and `replace-text` on pushes, pull requests, and manual runs when their module or workflow changes. They run module tests, vet, and trimmed builds on hosted Linux, macOS, and Windows; use each module's `go.mod` and workflow as the toolchain source of truth.
 
 `check-folder-size`, `find-content`, and `find-everything` also run the race detector on Linux. `find-content` repeats its determinism/result-cap tests on Linux, while `find-everything` runs native OS-specific hidden-entry and symlink policy tests on every platform.
+
+`.github/workflows/api-stress-test-ci.yml` adds Linux race and repeated lifecycle/streaming semantics, stable allocation gates, and an uploaded collector/body/scheduler benchmark artifact. Benchmark timings are comparison data, not hosted-runner pass/fail thresholds.
 
 `.github/workflows/common-module-ci.yml` runs the shared module checks and tests/builds `check-folder-size`, its importing consumer, on all three operating systems.
 
@@ -15,14 +17,12 @@ The public CI mirror is `https://github.com/tuanloc1105/my-cli-tea`. This checko
 ## Gitea Actions CI
 
 `.gitea/workflows/find-everything.yml` verifies `find-everything` on native
-`ubuntu-latest`, `macos-latest`, and `windows-latest` runners with Go 1.24.4.
+`ubuntu-latest`, `macos-latest`, and `windows-latest` runners; use the module and workflow as the toolchain source of truth.
 Every job runs module verification, tests, vet, and build; Linux also runs the
 race detector. The native finder-policy step exercises the OS-specific hidden
 attribute tests and symlink contract. Windows runners must allow symlink
 creation through Developer Mode or `SeCreateSymbolicLinkPrivilege`; the test
 fails with that prerequisite instead of silently skipping.
-
-## Gitea Actions CI
 
 `.gitea/workflows/find-content-ci.yml` verifies `find-content` on Ubuntu, macOS, and Windows when the module or workflow changes. Every OS runs `go test ./...`, `go vet ./...`, and `go build -trimpath ./...`; Linux also runs the race detector and the repeated determinism/result-cap gate.
 
@@ -76,12 +76,14 @@ Test all modules:
 bash -lc 'for d in api-stress-test check-folder-size common-module find-content find-everything replace-text; do if [ "$d" = api-stress-test ]; then (cd "$d" && env -u NO_COLOR go test ./...); else (cd "$d" && go test ./...); fi; done'
 ```
 
-Run plain `cd api-stress-test && go test ./...` separately when checking the inherited environment. With `NO_COLOR=1`, the pre-existing `internal/ui/TestColorWriterFORCE_COLOR` isolation issue is expected; the controlled command above removes that variable.
+Run plain `cd api-stress-test && go test ./...` separately when checking the inherited environment. With `NO_COLOR=1`, `internal/ui/TestColorWriterEnvironment/force_color` intentionally observes `NO_COLOR` precedence; the controlled command above removes that variable.
 
-Run the focused benchmark currently present in the repo:
+Run the `api-stress-test` allocation gates and benchmark suite:
 
 ```bash
-cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
+cd api-stress-test
+go test ./... -run 'Test.*Allocations' -count=1
+go test ./... -run '^$' -bench 'Benchmark(CollectorRecord|ResponseBodyStreaming|SchedulerIntegration)$' -benchmem
 ```
 
 ## Vet, Format, Tidy
@@ -114,7 +116,8 @@ bash -lc 'for d in api-stress-test check-folder-size common-module find-content 
 
 - Cobra lifecycle, flags, streams, or exit behavior: run the affected module's `go test ./cmd` and follow `docs/agent/cli-conventions.md`.
 - `api-stress-test/` behavior: `cd api-stress-test && env -u NO_COLOR go test ./...`
-- `api-stress-test/internal/stats/` performance or percentile changes: add `go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem`
+- `api-stress-test/` lifecycle, pacing, streaming, or cancellation: add `cd api-stress-test && env -u NO_COLOR go test -race ./...` and repeat `go test ./cmd ./internal/request -run 'Test.*(Duration|Grace|Signal|Warmup|RateLimiter|Matcher|Truncated|ExactRequest)' -count=20`
+- `api-stress-test/` allocation or performance changes: add `go test ./... -run 'Test.*Allocations' -count=1` and the three-benchmark selector documented above.
 - `api-stress-test/internal/request/` request behavior: `cd api-stress-test && go test ./internal/request`
 - `api-stress-test/internal/ui/` output/progress behavior: `cd api-stress-test && env -u NO_COLOR go test ./internal/ui`
 - `check-folder-size/cmd/` flags, output, timeout, or exit behavior: `cd check-folder-size && go test ./cmd`

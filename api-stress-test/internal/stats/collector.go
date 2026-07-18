@@ -9,101 +9,170 @@ import (
 	"time"
 )
 
-// reservoirSize controls the maximum number of latency samples retained for
-// percentile calculation. Reservoir sampling guarantees that every request has
-// an equal probability of being represented, so percentile estimates remain
-// statistically accurate. The trade-off is memory vs accuracy: 10,000 float64
-// values ≈ 80 KB, which provides sub-1% relative error on p99 for typical
-// workloads while keeping memory bounded regardless of total request count.
 const reservoirSize = 10000
 
-// Collector collects and calculates statistics for stress test results.
-// It is thread-safe and designed to handle concurrent result recording.
-// Uses reservoir sampling to bound memory for latency percentiles.
-type Collector struct {
-	mu                sync.Mutex
-	successes         int64
-	failures          int64
-	totalCount        int64           // Total requests recorded
-	reservoir         []float64       // Reservoir-sampled latencies (max reservoirSize)
-	latencySum        float64         // Running sum for average calculation
-	statusCount       map[int]int     // Distribution of HTTP status codes
-	errorMessages     map[string]int  // Error message frequency
-	minLatency        float64
-	maxLatency        float64
-	firstLatency      bool
-	startTime         int64           // Unix timestamp when first record was added
-	throughput        map[int]int     // Per-second request counts (second offset -> count)
-	totalResponseSize int64           // Total response body bytes received
+// Outcome classifies a measured request result for final accounting.
+type Outcome string
+
+const (
+	OutcomeSuccess   Outcome = "success"
+	OutcomeFailure   Outcome = "failure"
+	OutcomeCancelled Outcome = "cancelled"
+)
+
+// Sample is one measured request attempt.
+type Sample struct {
+	StatusCode    int
+	TotalLatency  float64
+	TTFB          float64
+	CompletedAt   time.Time
+	Outcome       Outcome
+	Error         string
+	ErrorKind     string
+	ResponseBytes int64
 }
 
-// NewCollector creates a new statistics collector.
-func NewCollector(initialCapacity int) *Collector {
-	cap := initialCapacity
-	if cap > reservoirSize {
-		cap = reservoirSize
+type latencySeries struct {
+	count     int64
+	sum       float64
+	min       float64
+	max       float64
+	reservoir []float64
+}
+
+func newLatencySeries(initialCapacity int) latencySeries {
+	if initialCapacity < 0 {
+		initialCapacity = 0
+	}
+	if initialCapacity > reservoirSize {
+		initialCapacity = reservoirSize
+	}
+	return latencySeries{reservoir: make([]float64, 0, initialCapacity)}
+}
+
+func (s *latencySeries) record(value float64) {
+	s.count++
+	s.sum += value
+	if s.count == 1 {
+		s.min = value
+		s.max = value
+	} else {
+		if value < s.min {
+			s.min = value
+		}
+		if value > s.max {
+			s.max = value
+		}
+	}
+
+	if s.count <= reservoirSize {
+		s.reservoir = append(s.reservoir, value)
+		return
+	}
+	j := rand.Int64N(s.count)
+	if j < reservoirSize {
+		s.reservoir[j] = value
+	}
+}
+
+type seriesStatistics struct {
+	count  int64
+	min    float64
+	max    float64
+	avg    float64
+	p50    float64
+	p90    float64
+	p95    float64
+	p99    float64
+	sorted []float64
+}
+
+func (s *latencySeries) statistics() seriesStatistics {
+	sorted := append([]float64(nil), s.reservoir...)
+	sort.Float64s(sorted)
+	result := seriesStatistics{
+		count:  s.count,
+		min:    s.min,
+		max:    s.max,
+		p50:    percentile(sorted, 0.50),
+		p90:    percentile(sorted, 0.90),
+		p95:    percentile(sorted, 0.95),
+		p99:    percentile(sorted, 0.99),
+		sorted: sorted,
+	}
+	if s.count > 0 {
+		result.avg = s.sum / float64(s.count)
+	}
+	return result
+}
+
+// Collector collects and calculates statistics for stress test results.
+type Collector struct {
+	mu                sync.Mutex
+	measuredStart     time.Time
+	successes         int64
+	failures          int64
+	cancelled         int64
+	totalLatency      latencySeries
+	ttfb              latencySeries
+	statusCount       map[int]int
+	errorMessages     map[string]int
+	throughput        map[int]int
+	totalResponseSize int64
+}
+
+// NewCollector creates a collector whose throughput timeline begins at measuredStart.
+func NewCollector(initialCapacity int, measuredStart time.Time) *Collector {
+	if measuredStart.IsZero() {
+		measuredStart = time.Now()
 	}
 	return &Collector{
-		reservoir:     make([]float64, 0, cap),
+		measuredStart: measuredStart,
+		totalLatency:  newLatencySeries(initialCapacity),
+		ttfb:          newLatencySeries(initialCapacity),
 		statusCount:   make(map[int]int),
 		errorMessages: make(map[string]int),
 		throughput:    make(map[int]int),
-		firstLatency:  true,
 	}
 }
 
-// Record adds a request result to the collector in a thread-safe manner.
-func (c *Collector) Record(statusCode int, elapsed float64, ok bool, errorMsg string, responseSize int64) {
-	now := time.Now().Unix() // Computed before lock to reduce mutex contention
+// Record adds a request sample to the collector in a thread-safe manner.
+func (c *Collector) Record(sample Sample) {
+	completedAt := sample.CompletedAt
+	if completedAt.IsZero() {
+		completedAt = time.Now()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.totalCount++
-	c.latencySum += elapsed
-	c.totalResponseSize += responseSize
-	c.statusCount[statusCode]++
-
-	// Track throughput per second
-	if c.startTime == 0 {
-		c.startTime = now
+	c.totalLatency.record(sample.TotalLatency)
+	if sample.StatusCode != 0 {
+		c.ttfb.record(sample.TTFB)
 	}
-	sec := int(now - c.startTime)
-	c.throughput[sec]++
+	c.totalResponseSize += sample.ResponseBytes
 
-	// Reservoir sampling: keep exactly reservoirSize samples with uniform probability.
-	// When total requests exceed reservoirSize, each new sample replaces an existing
-	// one with probability reservoirSize/totalCount, ensuring unbiased representation.
-	// Histogram and percentile data are approximate when total > reservoirSize.
-	if int(c.totalCount) <= reservoirSize {
-		c.reservoir = append(c.reservoir, elapsed)
-	} else {
-		j := rand.IntN(int(c.totalCount))
-		if j < reservoirSize {
-			c.reservoir[j] = elapsed
-		}
+	second := int(completedAt.Sub(c.measuredStart) / time.Second)
+	if second < 0 {
+		second = 0
 	}
+	c.throughput[second]++
 
-	if errorMsg != "" {
-		c.errorMessages[errorMsg]++
-	}
-
-	if c.firstLatency {
-		c.minLatency = elapsed
-		c.maxLatency = elapsed
-		c.firstLatency = false
-	} else {
-		if elapsed < c.minLatency {
-			c.minLatency = elapsed
-		}
-		if elapsed > c.maxLatency {
-			c.maxLatency = elapsed
-		}
-	}
-
-	if ok {
+	switch sample.Outcome {
+	case OutcomeSuccess:
 		c.successes++
-	} else {
+		c.statusCount[sample.StatusCode]++
+	case OutcomeCancelled:
+		c.cancelled++
+		if sample.StatusCode != 0 {
+			c.statusCount[sample.StatusCode]++
+		}
+	default:
 		c.failures++
+		c.statusCount[sample.StatusCode]++
+		if sample.Error != "" {
+			c.errorMessages[sample.Error]++
+		}
 	}
 }
 
@@ -113,14 +182,21 @@ type ErrorEntry struct {
 	Count   int    `json:"count"`
 }
 
-// HistogramBucket represents a single bucket in a latency histogram.
+// HistogramBucket represents a single bucket in a total-latency histogram.
 type HistogramBucket struct {
 	MinSec float64 `json:"min_sec"`
 	MaxSec float64 `json:"max_sec"`
 	Count  int     `json:"count"`
 }
 
-// ThroughputEntry records requests completed in a one-second interval.
+// SamplingMetadata describes the bounded sample used by the histogram.
+type SamplingMetadata struct {
+	SampleCount int   `json:"sample_count"`
+	Population  int64 `json:"population"`
+	IsSampled   bool  `json:"is_sampled"`
+}
+
+// ThroughputEntry records attempts completed in a one-second interval.
 type ThroughputEntry struct {
 	Second   int `json:"second"`
 	Requests int `json:"requests"`
@@ -130,9 +206,12 @@ type ThroughputEntry struct {
 type Statistics struct {
 	Successes          int64             `json:"successes"`
 	Failures           int64             `json:"failures"`
+	Completed          int64             `json:"completed"`
+	Cancelled          int64             `json:"cancelled"`
 	Total              int64             `json:"total"`
 	SuccessRate        float64           `json:"success_rate"`
 	StatusCount        map[int]int       `json:"status_count"`
+	LatencySamples     int64             `json:"latency_samples"`
 	MinLatency         float64           `json:"min_latency"`
 	MaxLatency         float64           `json:"max_latency"`
 	AvgLatency         float64           `json:"avg_latency"`
@@ -140,10 +219,17 @@ type Statistics struct {
 	P90Latency         float64           `json:"p90_latency"`
 	P95Latency         float64           `json:"p95_latency"`
 	P99Latency         float64           `json:"p99_latency"`
+	TTFBSamples        int64             `json:"ttfb_samples"`
+	MinTTFB            float64           `json:"min_ttfb"`
+	MaxTTFB            float64           `json:"max_ttfb"`
+	AvgTTFB            float64           `json:"avg_ttfb"`
+	P50TTFB            float64           `json:"p50_ttfb"`
+	P90TTFB            float64           `json:"p90_ttfb"`
+	P95TTFB            float64           `json:"p95_ttfb"`
+	P99TTFB            float64           `json:"p99_ttfb"`
 	TopErrors          []ErrorEntry      `json:"top_errors,omitempty"`
-	// Histogram buckets use reservoir-sampled data and are approximate
-	// when total requests exceed 10,000.
 	Histogram          []HistogramBucket `json:"histogram,omitempty"`
+	HistogramSampling  SamplingMetadata  `json:"histogram_sampling"`
 	Throughput         []ThroughputEntry `json:"throughput,omitempty"`
 	AvgResponseBytes   int64             `json:"avg_response_bytes"`
 	TotalResponseBytes int64             `json:"total_response_bytes"`
@@ -154,82 +240,87 @@ func (c *Collector) GetStatistics() Statistics {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.totalCount == 0 {
-		return Statistics{
-			StatusCount: make(map[int]int),
-		}
+	totalLatency := c.totalLatency.statistics()
+	ttfb := c.ttfb.statistics()
+	total := c.successes + c.failures + c.cancelled
+	completed := c.successes + c.failures
+
+	statusCount := make(map[int]int, len(c.statusCount))
+	for status, count := range c.statusCount {
+		statusCount[status] = count
 	}
 
-	// Sort reservoir for percentile calculation
-	sorted := make([]float64, len(c.reservoir))
-	copy(sorted, c.reservoir)
-	sort.Float64s(sorted)
-
-	// Average from running sum (exact, not sampled)
-	avgLatency := c.latencySum / float64(c.totalCount)
-
-	p50 := percentile(sorted, 0.50)
-	p90 := percentile(sorted, 0.90)
-	p95 := percentile(sorted, 0.95)
-	p99 := percentile(sorted, 0.99)
-
-	statusCountCopy := make(map[int]int)
-	for k, v := range c.statusCount {
-		statusCountCopy[k] = v
-	}
-
-	// Top errors
-	var topErrors []ErrorEntry
-	for msg, count := range c.errorMessages {
-		topErrors = append(topErrors, ErrorEntry{Message: msg, Count: count})
+	topErrors := make([]ErrorEntry, 0, len(c.errorMessages))
+	for message, count := range c.errorMessages {
+		topErrors = append(topErrors, ErrorEntry{Message: message, Count: count})
 	}
 	sort.Slice(topErrors, func(i, j int) bool {
+		if topErrors[i].Count == topErrors[j].Count {
+			return topErrors[i].Message < topErrors[j].Message
+		}
 		return topErrors[i].Count > topErrors[j].Count
 	})
 	if len(topErrors) > 5 {
 		topErrors = topErrors[:5]
 	}
 
-	// Build histogram from sorted reservoir
-	histogram := buildHistogram(sorted, c.minLatency, c.maxLatency)
-
-	// Build throughput timeline
 	var throughput []ThroughputEntry
 	if len(c.throughput) > 0 {
-		maxSec := 0
-		for s := range c.throughput {
-			if s > maxSec {
-				maxSec = s
+		maxSecond := 0
+		for second := range c.throughput {
+			if second > maxSecond {
+				maxSecond = second
 			}
 		}
-		throughput = make([]ThroughputEntry, 0, maxSec+1)
-		for s := 0; s <= maxSec; s++ {
-			throughput = append(throughput, ThroughputEntry{Second: s + 1, Requests: c.throughput[s]})
+		throughput = make([]ThroughputEntry, 0, maxSecond+1)
+		for second := 0; second <= maxSecond; second++ {
+			throughput = append(throughput, ThroughputEntry{
+				Second:   second + 1,
+				Requests: c.throughput[second],
+			})
 		}
 	}
 
-	successRate := float64(c.successes) / float64(c.totalCount) * 100
-
+	var successRate float64
+	if completed > 0 {
+		successRate = float64(c.successes) / float64(completed) * 100
+	}
 	var avgResponseBytes int64
-	if c.totalCount > 0 {
-		avgResponseBytes = c.totalResponseSize / c.totalCount
+	if total > 0 {
+		avgResponseBytes = c.totalResponseSize / total
 	}
 
 	return Statistics{
-		Successes:          c.successes,
-		Failures:           c.failures,
-		Total:              c.totalCount,
-		SuccessRate:        successRate,
-		StatusCount:        statusCountCopy,
-		MinLatency:         c.minLatency,
-		MaxLatency:         c.maxLatency,
-		AvgLatency:         avgLatency,
-		P50Latency:         p50,
-		P90Latency:         p90,
-		P95Latency:         p95,
-		P99Latency:         p99,
-		TopErrors:          topErrors,
-		Histogram:          histogram,
+		Successes:      c.successes,
+		Failures:       c.failures,
+		Completed:      completed,
+		Cancelled:      c.cancelled,
+		Total:          total,
+		SuccessRate:    successRate,
+		StatusCount:    statusCount,
+		LatencySamples: totalLatency.count,
+		MinLatency:     totalLatency.min,
+		MaxLatency:     totalLatency.max,
+		AvgLatency:     totalLatency.avg,
+		P50Latency:     totalLatency.p50,
+		P90Latency:     totalLatency.p90,
+		P95Latency:     totalLatency.p95,
+		P99Latency:     totalLatency.p99,
+		TTFBSamples:    ttfb.count,
+		MinTTFB:        ttfb.min,
+		MaxTTFB:        ttfb.max,
+		AvgTTFB:        ttfb.avg,
+		P50TTFB:        ttfb.p50,
+		P90TTFB:        ttfb.p90,
+		P95TTFB:        ttfb.p95,
+		P99TTFB:        ttfb.p99,
+		TopErrors:      topErrors,
+		Histogram:      buildHistogram(totalLatency.sorted, totalLatency.min, totalLatency.max),
+		HistogramSampling: SamplingMetadata{
+			SampleCount: len(totalLatency.sorted),
+			Population:  totalLatency.count,
+			IsSampled:   int64(len(totalLatency.sorted)) < totalLatency.count,
+		},
 		Throughput:         throughput,
 		AvgResponseBytes:   avgResponseBytes,
 		TotalResponseBytes: c.totalResponseSize,
@@ -255,26 +346,21 @@ func buildHistogram(sorted []float64, minVal, maxVal float64) []HistogramBucket 
 		buckets[i].MaxSec = minVal + float64(i+1)*bucketWidth
 	}
 
-	for _, v := range sorted {
-		idx := int((v - minVal) / bucketWidth)
-		if idx >= numBuckets {
-			idx = numBuckets - 1
+	for _, value := range sorted {
+		index := int((value - minVal) / bucketWidth)
+		if index >= numBuckets {
+			index = numBuckets - 1
 		}
-		if idx < 0 {
-			idx = 0
+		if index < 0 {
+			index = 0
 		}
-		buckets[idx].Count++
+		buckets[index].Count++
 	}
 
-	// Remove trailing empty buckets
-	last := len(buckets) - 1
-	for last > 0 && buckets[last].Count == 0 {
-		last--
-	}
-	return buckets[:last+1]
+	return buckets
 }
 
-// percentile calculates percentile using linear interpolation method.
+// percentile calculates percentile using linear interpolation.
 func percentile(sorted []float64, p float64) float64 {
 	if len(sorted) == 0 {
 		return 0
@@ -283,15 +369,12 @@ func percentile(sorted []float64, p float64) float64 {
 		return sorted[0]
 	}
 
-	n := float64(len(sorted))
-	position := (n - 1) * p
+	position := float64(len(sorted)-1) * p
 	lower := int(position)
 	upper := lower + 1
-
 	if upper >= len(sorted) {
 		return sorted[len(sorted)-1]
 	}
-
 	weight := position - float64(lower)
 	return sorted[lower]*(1-weight) + sorted[upper]*weight
 }

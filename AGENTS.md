@@ -14,7 +14,7 @@ This is a collection of five standalone Go CLI tools plus one shared module. Eac
 
 | Area                   | Purpose                                                                                                | Read first                                                                           |
 | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `api-stress-test/`   | HTTP load/stress tester. Current active project focus is high-concurrency correctness and performance. | `api-stress-test/cmd/root.go`, then `docs/agent/api-stress-test.md`              |
+| `api-stress-test/`   | HTTP load/stress tester with strict pacing, graceful drain, streaming response validation, and schema-v2 reports. | `api-stress-test/cmd/root.go`, `api-stress-test/cmd/lifecycle.go`, then `docs/agent/api-stress-test.md` |
 | `check-folder-size/` | Directory size analyzer with terminal and JSON output.                                                 | `check-folder-size/cmd/root.go`, `check-folder-size/internal/scanner/`           |
 | `find-content/`      | Deterministic bounded text search with hidden/special-file policies and directory listing.             | `find-content/cmd/root.go`, `find-content/internal/searcher/`                    |
 | `find-everything/`   | Bounded concurrent file finder with partial reports, TTY-safe output, and atomic large-result saves.   | `find-everything/cmd/root.go`, `find-everything/internal/finder/finder.go`       |
@@ -40,7 +40,7 @@ cd <tool-dir> && go test ./...
 - Run the focused `api-stress-test` benchmark:
 
 ```bash
-cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem
+cd api-stress-test && go test ./... -run '^$' -bench 'Benchmark(CollectorRecord|ResponseBodyStreaming|SchedulerIntegration)$' -benchmem
 ```
 
 - Repeat the concurrency-sensitive `find-everything` finder tests:
@@ -58,8 +58,9 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 
 - Changing CLI flags, command validation, streams, or exit behavior: read the tool's `cmd/root.go`, its command tests, and `docs/agent/cli-conventions.md`.
 - Changing terminal output or JSON output: read the relevant `internal/ui/` package or single-file CLI output functions first.
-- Changing `api-stress-test` HTTP behavior: read `api-stress-test/cmd/root.go`, `api-stress-test/internal/request/client.go`, and `api-stress-test/internal/request/ratelimiter.go`.
-- Changing `api-stress-test` metrics, percentiles, histograms, throughput, or high-concurrency behavior: read `api-stress-test/internal/stats/collector.go` and `docs/agent/api-stress-test.md`.
+- Changing `api-stress-test` HTTP bodies, timing, expectations, or rate pacing: read `api-stress-test/internal/request/client.go`, `matcher.go`, and `ratelimiter.go`.
+- Changing `api-stress-test` scheduling, warmup, shutdown, signals, exit codes, TTY behavior, or report files: read `api-stress-test/cmd/lifecycle.go`, its tests, and `docs/agent/api-stress-test.md`.
+- Changing `api-stress-test` metrics, schema, percentiles, histograms, or throughput: read `api-stress-test/internal/stats/collector.go`, `api-stress-test/internal/ui/output.go`, and `docs/agent/api-stress-test.md`.
 - Changing filesystem traversal/search: read `check-folder-size/internal/scanner/scanner.go`, `find-content/internal/searcher/`, or `find-everything/internal/finder/` as appropriate.
 - Changing `check-folder-size` accounting or platform metadata: read `check-folder-size/internal/scanner/types.go`, `scanner.go`, `metadata.go`, the target `metadata_<os>.go`, and matching scanner tests; use `check-folder-size/go.mod` as the toolchain/dependency source of truth.
 - Changing `replace-text` flags, validation, output, or exit behavior: read `replace-text/cmd/root.go` and `replace-text/cmd/root_test.go`.
@@ -76,7 +77,7 @@ For all-module loops, Makefile caveats, tidy, vet, and release notes, read `docs
 - Golden rule: no workaround.
 - Treat any user request assessed as a breaking or large change as plan-first work: switch to Plan mode before implementation. If Plan mode is unavailable at runtime, stop immediately and ask the user whether to switch to Plan mode.
 - Code comments must be brief and concise; avoid long explanations.
-- Go version target is Go 1.24. Keep dependencies minimal; Cobra is the CLI framework used across tools.
+- Use each module's `go.mod` and affected CI workflow as the Go toolchain/dependency source of truth. Keep dependencies minimal; Cobra is the CLI framework used across tools.
 - Use standard Go formatting. Run `gofmt` or `gofmt -w` only on files you intentionally changed.
 - Error handling should use contextual `fmt.Errorf("...: %w", err)` where wrapping helps callers.
 - Preserve CLI flag names and existing public behavior unless the user explicitly asks for a breaking change.

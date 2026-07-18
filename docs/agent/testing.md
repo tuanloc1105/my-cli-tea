@@ -7,6 +7,8 @@ Use this file to choose the narrowest meaningful verification command.
 Test files currently exist in:
 
 - `api-stress-test/cmd/root_test.go`
+- `api-stress-test/cmd/lifecycle_test.go`
+- `api-stress-test/cmd/report_file_test.go`
 - `api-stress-test/internal/request/client_test.go`
 - `api-stress-test/internal/request/ratelimiter_test.go`
 - `api-stress-test/internal/stats/collector_test.go`
@@ -45,6 +47,8 @@ Test files currently exist in:
 Benchmarks currently present are:
 
 - `api-stress-test/internal/stats/collector_test.go`: `BenchmarkCollectorRecord`
+- `api-stress-test/internal/request/client_test.go`: `BenchmarkResponseBodyStreaming`
+- `api-stress-test/cmd/lifecycle_test.go`: `BenchmarkSchedulerIntegration`
 - `replace-text/internal/replacer/stream_test.go`: `BenchmarkStreamReplace`
 - `find-content/internal/searcher/matcher_test.go`: `BenchmarkMatcher`
 - `find-content/internal/searcher/reader_test.go`: `BenchmarkReader`
@@ -66,6 +70,9 @@ The current fuzz target is:
 | `api-stress-test/internal/stats/` | `cd api-stress-test && go test ./internal/stats` |
 | `api-stress-test` stats performance | `cd api-stress-test && go test ./internal/stats -bench BenchmarkCollectorRecord -benchmem` |
 | `api-stress-test/internal/ui/` | `cd api-stress-test && env -u NO_COLOR go test ./internal/ui` |
+| `api-stress-test` lifecycle/concurrency | `cd api-stress-test && env -u NO_COLOR go test -race ./... && go test ./cmd ./internal/request -run 'Test.*(Duration\|Grace\|Signal\|Warmup\|RateLimiter\|Matcher\|Truncated\|ExactRequest)' -count=20` |
+| `api-stress-test` allocations/benchmarks | `cd api-stress-test && go test ./... -run 'Test.*Allocations' -count=1 && go test ./... -run '^$' -bench 'Benchmark(CollectorRecord\|ResponseBodyStreaming\|SchedulerIntegration)$' -benchmem` |
+| `api-stress-test` cross-platform CI | `.github/workflows/api-stress-test-ci.yml` runs test, vet, and build on Linux, macOS, and Windows; Linux adds race, repeated semantics, allocation gates, and benchmark artifacts |
 | `check-folder-size/cmd/` | `cd check-folder-size && go test ./cmd` |
 | `check-folder-size/internal/scanner/` | `cd check-folder-size && go test ./internal/scanner` |
 | `check-folder-size` accounting/concurrency | `cd check-folder-size && go test -race ./...` |
@@ -107,13 +114,13 @@ cancellation, warning-only partial results, metadata/read failures, overflow,
 and non-nil empty results. Allocation assertions use filesystem invariants and
 skip with a reason when the host does not expose the required capability.
 
-`api-stress-test/internal/ui/TestColorWriterFORCE_COLOR` is sensitive to an inherited `NO_COLOR`. Use `env -u NO_COLOR go test ./...` for the controlled full-module result, and report a separate plain `go test ./...` run when diagnosing the ambient environment.
+`api-stress-test/internal/ui/TestColorWriterEnvironment/force_color` is sensitive to an inherited `NO_COLOR`, which intentionally takes precedence over `FORCE_COLOR`. Use `env -u NO_COLOR go test ./...` for the controlled full-module result, and report a separate plain `go test ./...` run when diagnosing the ambient environment.
 
 ## High-Concurrency Guidance
 
 For `api-stress-test`, correctness matters more than just passing unit tests. For high-concurrency changes:
 
 - Check request accounting under cancellation and duration mode.
-- Check collector contention and allocation behavior.
-- Check progress rendering does not dominate worker throughput.
+- Check collector, streaming-body, and scheduler allocation gates; keep nanosecond benchmark results informational.
+- Check progress remains TTY-only and does not dominate worker throughput.
 - Keep benchmark comparisons reproducible and include `-benchmem`.

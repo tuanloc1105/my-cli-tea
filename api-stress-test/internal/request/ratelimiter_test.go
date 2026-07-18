@@ -2,118 +2,153 @@ package request
 
 import (
 	"context"
+	"math"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestRateLimiterUnlimited(t *testing.T) {
-	limiter := NewRateLimiter(0)
+func TestNewRateLimiterValidation(t *testing.T) {
+	tests := []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1), 1e-20, 1e10}
+	for _, rate := range tests {
+		if limiter, err := NewRateLimiter(rate); err == nil {
+			limiter.Stop()
+			t.Errorf("NewRateLimiter(%v) succeeded, want error", rate)
+		}
+	}
+}
+
+func TestRateLimiterUnlimitedAndCancellation(t *testing.T) {
+	limiter, err := NewRateLimiter(0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer limiter.Stop()
 	ctx := context.Background()
-
-	start := time.Now()
 	for i := 0; i < 100; i++ {
 		if !limiter.Wait(ctx) {
-			t.Fatal("Wait returned false unexpectedly")
+			t.Fatal("unlimited Wait returned false")
 		}
 	}
-	elapsed := time.Since(start)
-
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("unlimited limiter took %v, expected near-instant", elapsed)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if limiter.Wait(cancelled) {
+		t.Fatal("Wait succeeded with cancelled context")
 	}
 }
 
-func TestRateLimiterNegative(t *testing.T) {
-	limiter := NewRateLimiter(-1)
+func TestRateLimiterUsesBurstOneWithoutBacklog(t *testing.T) {
+	timer := newFakeRateTimer()
+	limiter, err := newRateLimiter(10, func(time.Duration) rateTimer { return timer })
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer limiter.Stop()
 	ctx := context.Background()
 
-	start := time.Now()
-	for i := 0; i < 100; i++ {
-		if !limiter.Wait(ctx) {
-			t.Fatal("Wait returned false unexpectedly")
-		}
-	}
-	elapsed := time.Since(start)
-
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("negative rate limiter took %v, expected near-instant", elapsed)
-	}
-}
-
-func TestRateLimiterThrottles(t *testing.T) {
-	// 10 req/s = 100ms interval
-	limiter := NewRateLimiter(10)
-	defer limiter.Stop()
-	ctx := context.Background()
-
-	start := time.Now()
-	for i := 0; i < 5; i++ {
-		if !limiter.Wait(ctx) {
-			t.Fatal("Wait returned false unexpectedly")
-		}
-	}
-	elapsed := time.Since(start)
-
-	// First request is immediate, then 4 ticks at 100ms each ≈ 400ms
-	if elapsed < 350*time.Millisecond {
-		t.Errorf("rate limiter elapsed %v, expected at least ~350ms for 5 requests at 10 req/s", elapsed)
-	}
-}
-
-func TestRateLimiterContextCancelled(t *testing.T) {
-	// Very slow rate: 1 req per 10 seconds
-	limiter := NewRateLimiter(0.1)
-	defer limiter.Stop()
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Cancel after 50ms
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	// First wait might succeed (ticker fires immediately), but eventually should return false
-	start := time.Now()
-	for limiter.Wait(ctx) {
-		// keep waiting
-	}
-	elapsed := time.Since(start)
-
-	// Should return within ~100ms (50ms cancel + scheduling), NOT 10 seconds
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("cancelled limiter took %v, expected quick return after cancel", elapsed)
-	}
-}
-
-func TestRateLimiterUnlimitedContextCancelled(t *testing.T) {
-	limiter := NewRateLimiter(0)
-	defer limiter.Stop()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
-
-	if limiter.Wait(ctx) {
-		t.Error("Wait should return false when context is already cancelled")
-	}
-}
-
-func TestRateLimiterFirstRequestImmediate(t *testing.T) {
-	// Very slow rate: 1 req per 10 seconds
-	limiter := NewRateLimiter(0.1)
-	defer limiter.Stop()
-	ctx := context.Background()
-
-	start := time.Now()
 	if !limiter.Wait(ctx) {
-		t.Fatal("first Wait should return true")
+		t.Fatal("first Wait should be immediate")
 	}
-	elapsed := time.Since(start)
+	timer.Tick()
+	second := make(chan bool, 1)
+	go func() { second <- limiter.Wait(ctx) }()
+	select {
+	case <-second:
+		t.Fatal("idle tick was retained as backlog")
+	case <-time.After(20 * time.Millisecond):
+	}
+	timer.Tick()
+	if !<-second {
+		t.Fatal("second Wait did not accept fresh tick")
+	}
 
-	// First request should be near-instant, not wait 10 seconds
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("first request took %v, expected near-instant", elapsed)
+	third := make(chan bool, 1)
+	go func() { third <- limiter.Wait(ctx) }()
+	select {
+	case <-third:
+		t.Fatal("third Wait passed without a new tick")
+	case <-time.After(20 * time.Millisecond):
+	}
+	timer.Tick()
+	if !<-third {
+		t.Fatal("third Wait did not accept fresh tick")
+	}
+	if resets := timer.ResetCount(); resets != 2 {
+		t.Fatalf("timer resets = %d, want 2", resets)
+	}
+}
+
+func TestRateLimiterCancellationAndStopUnblockWait(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(map[bool]string{false: "context", true: "stop"}[stop], func(t *testing.T) {
+			timer := newFakeRateTimer()
+			limiter, err := newRateLimiter(1, func(time.Duration) rateTimer { return timer })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !limiter.Wait(context.Background()) {
+				t.Fatal("first Wait should be immediate")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			waited := make(chan bool, 1)
+			go func() { waited <- limiter.Wait(ctx) }()
+			timer.WaitForReset(t)
+			if stop {
+				limiter.Stop()
+			} else {
+				cancel()
+			}
+			if <-waited {
+				t.Fatal("Wait succeeded after cancellation")
+			}
+			cancel()
+			limiter.Stop()
+		})
+	}
+}
+
+type fakeRateTimer struct {
+	c       chan time.Time
+	resetCh chan struct{}
+	mu      sync.Mutex
+	resets  int
+	armed   bool
+}
+
+func newFakeRateTimer() *fakeRateTimer {
+	return &fakeRateTimer{c: make(chan time.Time, 1), resetCh: make(chan struct{}, 10)}
+}
+
+func (t *fakeRateTimer) Chan() <-chan time.Time { return t.c }
+func (t *fakeRateTimer) Stop() bool             { return true }
+func (t *fakeRateTimer) Reset(time.Duration) bool {
+	t.mu.Lock()
+	t.resets++
+	t.armed = true
+	t.mu.Unlock()
+	t.resetCh <- struct{}{}
+	return true
+}
+func (t *fakeRateTimer) Tick() {
+	t.mu.Lock()
+	if !t.armed {
+		t.mu.Unlock()
+		return
+	}
+	t.armed = false
+	t.mu.Unlock()
+	t.c <- time.Now()
+}
+func (t *fakeRateTimer) ResetCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.resets
+}
+func (t *fakeRateTimer) WaitForReset(tst *testing.T) {
+	tst.Helper()
+	select {
+	case <-t.resetCh:
+	case <-time.After(time.Second):
+		tst.Fatal("timer was not reset")
 	}
 }

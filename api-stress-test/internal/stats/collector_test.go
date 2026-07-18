@@ -1,270 +1,288 @@
 package stats
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
-func TestCollectorRecord(t *testing.T) {
-	c := NewCollector(10)
+func recordAt(c *Collector, start time.Time, offset time.Duration, total, ttfb float64, outcome Outcome, status int, err string, bytes int64) {
+	c.Record(Sample{
+		StatusCode:    status,
+		TotalLatency:  total,
+		TTFB:          ttfb,
+		CompletedAt:   start.Add(offset),
+		Outcome:       outcome,
+		Error:         err,
+		ResponseBytes: bytes,
+	})
+}
 
-	c.Record(200, 0.1, true, "", 100)
-	c.Record(200, 0.2, true, "", 200)
-	c.Record(500, 0.3, false, "server error", 0)
-	c.Record(0, 0.05, false, "connection refused", 0)
+func TestCollectorAccountingAndIndependentLatencySeries(t *testing.T) {
+	start := time.Unix(100, 0)
+	c := NewCollector(10, start)
+	recordAt(c, start, 100*time.Millisecond, 0.30, 0.05, OutcomeSuccess, 200, "", 100)
+	recordAt(c, start, 200*time.Millisecond, 0.60, 0.10, OutcomeFailure, 500, "server error", 200)
+	recordAt(c, start, 300*time.Millisecond, 0.15, 0, OutcomeCancelled, 0, "context canceled", 50)
 
 	stat := c.GetStatistics()
-
-	if stat.Total != 4 {
-		t.Errorf("total = %d, want 4", stat.Total)
+	if stat.Total != 3 || stat.Completed != 2 || stat.Cancelled != 1 {
+		t.Fatalf("accounting = total %d, completed %d, cancelled %d", stat.Total, stat.Completed, stat.Cancelled)
 	}
-	if stat.Successes != 2 {
-		t.Errorf("successes = %d, want 2", stat.Successes)
+	if stat.Successes != 1 || stat.Failures != 1 || stat.SuccessRate != 50 {
+		t.Errorf("outcomes = successes %d, failures %d, rate %.1f", stat.Successes, stat.Failures, stat.SuccessRate)
 	}
-	if stat.Failures != 2 {
-		t.Errorf("failures = %d, want 2", stat.Failures)
+	if stat.Total != stat.Successes+stat.Failures+stat.Cancelled {
+		t.Error("total accounting invariant violated")
 	}
-	if stat.StatusCount[200] != 2 {
-		t.Errorf("status 200 count = %d, want 2", stat.StatusCount[200])
+	if stat.Completed != stat.Successes+stat.Failures {
+		t.Error("completed accounting invariant violated")
 	}
-	if stat.StatusCount[500] != 1 {
-		t.Errorf("status 500 count = %d, want 1", stat.StatusCount[500])
+	if stat.LatencySamples != 3 || stat.TTFBSamples != 2 {
+		t.Errorf("sample counts = latency %d, TTFB %d", stat.LatencySamples, stat.TTFBSamples)
 	}
-	if stat.StatusCount[0] != 1 {
-		t.Errorf("status 0 count = %d, want 1", stat.StatusCount[0])
+	if !closeEnough(stat.AvgLatency, 0.35) || !closeEnough(stat.AvgTTFB, 0.075) {
+		t.Errorf("averages = latency %f, TTFB %f", stat.AvgLatency, stat.AvgTTFB)
+	}
+	if stat.StatusCount[0] != 0 || len(stat.TopErrors) != 1 || stat.TopErrors[0].Message != "server error" {
+		t.Errorf("planned cancellation leaked into failure groups: statuses=%v errors=%v", stat.StatusCount, stat.TopErrors)
+	}
+	if stat.TotalResponseBytes != 350 || stat.AvgResponseBytes != 116 {
+		t.Errorf("decoded bytes = total %d, avg %d", stat.TotalResponseBytes, stat.AvgResponseBytes)
 	}
 }
 
-func TestCollectorMinMaxLatency(t *testing.T) {
-	c := NewCollector(5)
+func closeEnough(got, want float64) bool {
+	difference := got - want
+	return difference > -1e-12 && difference < 1e-12
+}
 
-	c.Record(200, 0.5, true, "", 0)
-	c.Record(200, 0.1, true, "", 0)
-	c.Record(200, 0.9, true, "", 0)
+func TestCollectorSuccessRateExcludesCancelled(t *testing.T) {
+	start := time.Unix(200, 0)
+	c := NewCollector(3, start)
+	recordAt(c, start, 0, 0.1, 0, OutcomeSuccess, 200, "", 0)
+	recordAt(c, start, 0, 0.1, 0, OutcomeCancelled, 0, "cancelled", 0)
 
 	stat := c.GetStatistics()
-
-	if stat.MinLatency != 0.1 {
-		t.Errorf("min latency = %f, want 0.1", stat.MinLatency)
-	}
-	if stat.MaxLatency != 0.9 {
-		t.Errorf("max latency = %f, want 0.9", stat.MaxLatency)
+	if stat.SuccessRate != 100 {
+		t.Fatalf("success rate = %f, want 100", stat.SuccessRate)
 	}
 }
 
-func TestCollectorAvgLatency(t *testing.T) {
-	c := NewCollector(3)
-
-	c.Record(200, 0.1, true, "", 0)
-	c.Record(200, 0.2, true, "", 0)
-	c.Record(200, 0.3, true, "", 0)
+func TestCollectorTTFBSamplePresenceUsesResponseStatus(t *testing.T) {
+	start := time.Unix(250, 0)
+	c := NewCollector(2, start)
+	recordAt(c, start, 0, 0.1, 0, OutcomeSuccess, 204, "", 0)
+	recordAt(c, start, 0, 0.1, 0, OutcomeCancelled, 200, "cancelled during body", 0)
 
 	stat := c.GetStatistics()
-
-	expected := 0.2
-	if diff := stat.AvgLatency - expected; diff > 0.0001 || diff < -0.0001 {
-		t.Errorf("avg latency = %f, want %f", stat.AvgLatency, expected)
+	if stat.TTFBSamples != 2 {
+		t.Fatalf("TTFB samples = %d, want 2 responses with headers", stat.TTFBSamples)
+	}
+	if stat.StatusCount[204] != 1 || stat.StatusCount[200] != 1 || len(stat.TopErrors) != 0 {
+		t.Errorf("status/error grouping = statuses %v, errors %v", stat.StatusCount, stat.TopErrors)
 	}
 }
 
-func TestCollectorErrorTracking(t *testing.T) {
-	c := NewCollector(10)
-
-	for i := 0; i < 5; i++ {
-		c.Record(0, 0.1, false, "connection refused", 0)
+func TestCollectorLatencyBoundsAndPercentiles(t *testing.T) {
+	start := time.Unix(300, 0)
+	c := NewCollector(100, start)
+	for i := 1; i <= 100; i++ {
+		value := float64(i) * 0.01
+		recordAt(c, start, time.Duration(i)*time.Millisecond, value, value/2, OutcomeSuccess, 200, "", 0)
 	}
-	for i := 0; i < 3; i++ {
-		c.Record(0, 0.1, false, "timeout", 0)
-	}
-	c.Record(0, 0.1, false, "dns error", 0)
 
 	stat := c.GetStatistics()
+	if stat.MinLatency != 0.01 || stat.MaxLatency != 1 {
+		t.Errorf("total latency bounds = [%f, %f]", stat.MinLatency, stat.MaxLatency)
+	}
+	if stat.MinTTFB != 0.005 || stat.MaxTTFB != 0.5 {
+		t.Errorf("TTFB bounds = [%f, %f]", stat.MinTTFB, stat.MaxTTFB)
+	}
+	if stat.P95Latency < 0.94 || stat.P95Latency > 0.96 {
+		t.Errorf("p95 total latency = %f, want ~0.95", stat.P95Latency)
+	}
+	if stat.P95TTFB < 0.47 || stat.P95TTFB > 0.48 {
+		t.Errorf("p95 TTFB = %f, want ~0.475", stat.P95TTFB)
+	}
+}
 
-	if len(stat.TopErrors) != 3 {
-		t.Fatalf("got %d top errors, want 3", len(stat.TopErrors))
+func TestCollectorReservoirMetadataIsIndependent(t *testing.T) {
+	start := time.Unix(400, 0)
+	c := NewCollector(100, start)
+	const attempts = reservoirSize + 2000
+	for i := 0; i < attempts; i++ {
+		ttfb := 0.0
+		status := 0
+		outcome := OutcomeFailure
+		if i%2 == 0 {
+			ttfb = 0.01
+			status = 200
+			outcome = OutcomeSuccess
+		}
+		recordAt(c, start, 0, float64(i)*0.0001, ttfb, outcome, status, "", 0)
 	}
-	if stat.TopErrors[0].Message != "connection refused" || stat.TopErrors[0].Count != 5 {
-		t.Errorf("top error = %v, want {connection refused, 5}", stat.TopErrors[0])
+
+	stat := c.GetStatistics()
+	if stat.LatencySamples != attempts || stat.TTFBSamples != attempts/2 {
+		t.Fatalf("exact sample counts = latency %d, TTFB %d", stat.LatencySamples, stat.TTFBSamples)
 	}
-	if stat.TopErrors[1].Message != "timeout" || stat.TopErrors[1].Count != 3 {
-		t.Errorf("second error = %v, want {timeout, 3}", stat.TopErrors[1])
+	meta := stat.HistogramSampling
+	if meta.SampleCount != reservoirSize || meta.Population != attempts || !meta.IsSampled {
+		t.Errorf("histogram sampling metadata = %+v", meta)
+	}
+	count := 0
+	for _, bucket := range stat.Histogram {
+		count += bucket.Count
+	}
+	if count != reservoirSize {
+		t.Errorf("histogram sample total = %d, want %d", count, reservoirSize)
+	}
+}
+
+func TestCollectorThroughputStartsAtMeasuredOrigin(t *testing.T) {
+	start := time.Unix(500, 0)
+	c := NewCollector(3, start)
+	recordAt(c, start, 2100*time.Millisecond, 0.1, 0.02, OutcomeSuccess, 200, "", 0)
+	recordAt(c, start, 4200*time.Millisecond, 0.1, 0.02, OutcomeSuccess, 200, "", 0)
+
+	stat := c.GetStatistics()
+	want := []ThroughputEntry{
+		{Second: 1, Requests: 0},
+		{Second: 2, Requests: 0},
+		{Second: 3, Requests: 1},
+		{Second: 4, Requests: 0},
+		{Second: 5, Requests: 1},
+	}
+	if len(stat.Throughput) != len(want) {
+		t.Fatalf("throughput = %v, want %v", stat.Throughput, want)
+	}
+	for i := range want {
+		if stat.Throughput[i] != want[i] {
+			t.Errorf("throughput[%d] = %+v, want %+v", i, stat.Throughput[i], want[i])
+		}
+	}
+}
+
+func TestCollectorTopErrorsDeterministicOnTies(t *testing.T) {
+	start := time.Unix(600, 0)
+	c := NewCollector(10, start)
+	for _, message := range []string{"zeta", "alpha", "middle"} {
+		recordAt(c, start, 0, 0.1, 0, OutcomeFailure, 0, message, 0)
+	}
+
+	stat := c.GetStatistics()
+	for i, want := range []string{"alpha", "middle", "zeta"} {
+		if stat.TopErrors[i].Message != want {
+			t.Fatalf("top errors = %v, want alphabetical tie order", stat.TopErrors)
+		}
 	}
 }
 
 func TestCollectorTopErrorsMaxFive(t *testing.T) {
-	c := NewCollector(20)
-
-	errors := []string{"err1", "err2", "err3", "err4", "err5", "err6", "err7"}
-	for _, e := range errors {
-		c.Record(0, 0.1, false, e, 0)
+	start := time.Unix(700, 0)
+	c := NewCollector(10, start)
+	for i := 0; i < 7; i++ {
+		recordAt(c, start, 0, 0.1, 0, OutcomeFailure, 0, fmt.Sprintf("error-%d", i), 0)
 	}
-
-	stat := c.GetStatistics()
-	if len(stat.TopErrors) != 5 {
-		t.Errorf("got %d top errors, want max 5", len(stat.TopErrors))
+	if got := len(c.GetStatistics().TopErrors); got != 5 {
+		t.Fatalf("top errors = %d, want 5", got)
 	}
 }
 
 func TestCollectorConcurrency(t *testing.T) {
-	c := NewCollector(1000)
+	start := time.Now()
+	c := NewCollector(1000, start)
 	var wg sync.WaitGroup
-
-	numGoroutines := 10
-	recordsPerGoroutine := 100
-
-	for i := 0; i < numGoroutines; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < recordsPerGoroutine; j++ {
-				c.Record(200, 0.1, true, "", 0)
+			for j := 0; j < 100; j++ {
+				recordAt(c, start, 0, 0.1, 0.02, OutcomeSuccess, 200, "", 0)
 			}
 		}()
 	}
-
 	wg.Wait()
-	stat := c.GetStatistics()
-
-	expected := int64(numGoroutines * recordsPerGoroutine)
-	if stat.Total != expected {
-		t.Errorf("total = %d, want %d", stat.Total, expected)
+	if got := c.GetStatistics().Total; got != 1000 {
+		t.Fatalf("total = %d, want 1000", got)
 	}
 }
 
 func TestCollectorNoRecords(t *testing.T) {
-	c := NewCollector(10)
-	stat := c.GetStatistics()
-
-	if stat.Total != 0 {
-		t.Errorf("total = %d, want 0", stat.Total)
+	stat := NewCollector(10, time.Now()).GetStatistics()
+	if stat.Total != 0 || stat.Completed != 0 || stat.Cancelled != 0 {
+		t.Errorf("unexpected accounting: %+v", stat)
 	}
-	if stat.Successes != 0 || stat.Failures != 0 {
-		t.Error("expected zero successes and failures")
+	if stat.StatusCount == nil {
+		t.Error("status_count must encode as an empty object")
+	}
+}
+
+func TestHistogramSingleValue(t *testing.T) {
+	start := time.Unix(800, 0)
+	c := NewCollector(10, start)
+	for i := 0; i < 10; i++ {
+		recordAt(c, start, 0, 0.5, 0, OutcomeSuccess, 200, "", 0)
+	}
+	stat := c.GetStatistics()
+	if len(stat.Histogram) != 1 || stat.Histogram[0].Count != 10 {
+		t.Fatalf("histogram = %+v", stat.Histogram)
+	}
+	if stat.HistogramSampling.IsSampled {
+		t.Error("small complete histogram must not be marked sampled")
 	}
 }
 
 func TestPercentile(t *testing.T) {
 	tests := []struct {
-		name     string
 		data     []float64
 		p        float64
 		expected float64
 	}{
-		{"empty", []float64{}, 0.5, 0},
-		{"single", []float64{1.0}, 0.5, 1.0},
-		{"p0", []float64{1, 2, 3, 4, 5}, 0.0, 1.0},
-		{"p100", []float64{1, 2, 3, 4, 5}, 1.0, 5.0},
-		{"p50 odd", []float64{1, 2, 3, 4, 5}, 0.5, 3.0},
-		{"p50 even", []float64{1, 2, 3, 4}, 0.5, 2.5},
-		{"p90", []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 0.9, 9.1},
-		{"p99", []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 0.99, 9.91},
+		{nil, 0.5, 0},
+		{[]float64{1}, 0.5, 1},
+		{[]float64{1, 2, 3, 4, 5}, 0, 1},
+		{[]float64{1, 2, 3, 4, 5}, 1, 5},
+		{[]float64{1, 2, 3, 4, 5}, 0.5, 3},
+		{[]float64{1, 2, 3, 4}, 0.5, 2.5},
+		{[]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 0.9, 9.1},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := percentile(tt.data, tt.p)
-			if diff := result - tt.expected; diff > 0.001 || diff < -0.001 {
-				t.Errorf("percentile(%v, %f) = %f, want %f", tt.data, tt.p, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestCollectorP95(t *testing.T) {
-	c := NewCollector(100)
-	for i := 1; i <= 100; i++ {
-		c.Record(200, float64(i)*0.01, true, "", 0)
-	}
-
-	stat := c.GetStatistics()
-	if stat.P95Latency < 0.94 || stat.P95Latency > 0.96 {
-		t.Errorf("p95 = %f, want ~0.95", stat.P95Latency)
-	}
-}
-
-func TestCollectorSuccessRate(t *testing.T) {
-	c := NewCollector(10)
-	for i := 0; i < 7; i++ {
-		c.Record(200, 0.1, true, "", 0)
-	}
-	for i := 0; i < 3; i++ {
-		c.Record(500, 0.1, false, "error", 0)
-	}
-
-	stat := c.GetStatistics()
-	if stat.SuccessRate != 70.0 {
-		t.Errorf("success rate = %f, want 70.0", stat.SuccessRate)
-	}
-}
-
-func TestCollectorResponseSize(t *testing.T) {
-	c := NewCollector(10)
-	c.Record(200, 0.1, true, "", 1000)
-	c.Record(200, 0.1, true, "", 2000)
-	c.Record(200, 0.1, true, "", 3000)
-
-	stat := c.GetStatistics()
-	if stat.TotalResponseBytes != 6000 {
-		t.Errorf("total bytes = %d, want 6000", stat.TotalResponseBytes)
-	}
-	if stat.AvgResponseBytes != 2000 {
-		t.Errorf("avg bytes = %d, want 2000", stat.AvgResponseBytes)
-	}
-}
-
-func TestCollectorReservoirSampling(t *testing.T) {
-	c := NewCollector(100)
-	for i := 0; i < 15000; i++ {
-		c.Record(200, float64(i)*0.0001, true, "", 0)
-	}
-
-	stat := c.GetStatistics()
-	if stat.Total != 15000 {
-		t.Errorf("total = %d, want 15000", stat.Total)
-	}
-	if len(stat.Histogram) == 0 {
-		t.Error("expected histogram even with reservoir sampling")
-	}
-}
-
-func TestCollectorHistogramSingleValue(t *testing.T) {
-	c := NewCollector(10)
-	for i := 0; i < 10; i++ {
-		c.Record(200, 0.5, true, "", 0)
-	}
-
-	stat := c.GetStatistics()
-	if len(stat.Histogram) != 1 {
-		t.Errorf("expected 1 histogram bucket for identical values, got %d", len(stat.Histogram))
-	}
-	if stat.Histogram[0].Count != 10 {
-		t.Errorf("bucket count = %d, want 10", stat.Histogram[0].Count)
-	}
-}
-
-func TestCollectorThroughputTimeline(t *testing.T) {
-	c := NewCollector(10)
-	for i := 0; i < 5; i++ {
-		c.Record(200, 0.1, true, "", 0)
-	}
-
-	stat := c.GetStatistics()
-	if len(stat.Throughput) == 0 {
-		t.Error("expected throughput data")
-	}
-	totalReqs := 0
-	for _, entry := range stat.Throughput {
-		totalReqs += entry.Requests
-	}
-	if totalReqs != 5 {
-		t.Errorf("throughput total = %d, want 5", totalReqs)
+		if got := percentile(tt.data, tt.p); got != tt.expected {
+			t.Errorf("percentile(%v, %f) = %f, want %f", tt.data, tt.p, got, tt.expected)
+		}
 	}
 }
 
 func BenchmarkCollectorRecord(b *testing.B) {
-	c := NewCollector(b.N)
+	start := time.Now()
+	c := NewCollector(b.N, start)
+	sample := Sample{
+		StatusCode:    200,
+		TotalLatency:  0.1,
+		TTFB:          0.02,
+		CompletedAt:   start,
+		Outcome:       OutcomeSuccess,
+		ResponseBytes: 100,
+	}
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c.Record(200, 0.1, true, "", 100)
+		c.Record(sample)
+	}
+}
+
+func TestCollectorRecordAllocations(t *testing.T) {
+	start := time.Now()
+	collector := NewCollector(1000, start)
+	sample := Sample{
+		StatusCode: 200, TotalLatency: 0.1, TTFB: 0.02, CompletedAt: start,
+		Outcome: OutcomeSuccess, ResponseBytes: 100,
+	}
+	allocations := testing.AllocsPerRun(1000, func() { collector.Record(sample) })
+	if allocations != 0 {
+		t.Fatalf("Collector.Record allocations = %.2f, want 0", allocations)
 	}
 }

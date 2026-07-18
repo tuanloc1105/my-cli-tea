@@ -1,0 +1,82 @@
+{
+  "schema_version": 2,
+  "config": {
+    "url": "http://example.com",
+    "method": "GET",
+    "requests": 2,
+    "concurrency": 1,
+    "timeout_seconds": 5
+  },
+  "effective_config": {
+    "url": "http://example.com",
+    "method": "GET",
+    "requests": 2,
+    "concurrency": 1,
+    "timeout_seconds": 5,
+    "warmup": "1s",
+    "shutdown_grace": "5s",
+    "insecure": false,
+    "disable_keepalive": false,
+    "disable_redirects": false,
+    "expect_status": 200,
+    "expect_body_enabled": true
+  },
+  "warmup": {
+    "duration_seconds": 1,
+    "successes": 1,
+    "failures": 0,
+    "cancelled": 0,
+    "total": 1
+  },
+  "statistics": {
+    "successes": 1,
+    "failures": 0,
+    "completed": 1,
+    "cancelled": 1,
+    "total": 2,
+    "success_rate": 100,
+    "status_count": {
+      "200": 1
+    },
+    "latency_samples": 2,
+    "min_latency": 0.1,
+    "max_latency": 0.3,
+    "avg_latency": 0.2,
+    "p50_latency": 0.2,
+    "p90_latency": 0.28,
+    "p95_latency": 0.29,
+    "p99_latency": 0.298,
+    "ttfb_samples": 1,
+    "min_ttfb": 0.02,
+    "max_ttfb": 0.02,
+    "avg_ttfb": 0.02,
+    "p50_ttfb": 0.02,
+    "p90_ttfb": 0.02,
+    "p95_ttfb": 0.02,
+    "p99_ttfb": 0.02,
+    "histogram": [
+      {
+        "min_sec": 0.1,
+        "max_sec": 0.3,
+        "count": 2
+      }
+    ],
+    "histogram_sampling": {
+      "sample_count": 2,
+      "population": 2,
+      "is_sampled": false
+    },
+    "throughput": [
+      {
+        "second": 1,
+        "requests": 2
+      }
+    ],
+    "avg_response_bytes": 5,
+    "total_response_bytes": 10
+  },
+  "total_time_seconds": 0.5,
+  "drain_time_seconds": 0.1,
+  "requests_per_second": 4,
+  "termination_reason": "duration_complete"
+}

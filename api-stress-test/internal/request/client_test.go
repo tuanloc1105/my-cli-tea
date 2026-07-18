@@ -1,13 +1,17 @@
 package request
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -120,8 +124,8 @@ func TestParseData(t *testing.T) {
 			expected: map[string]string{"key": "val=ue"},
 		},
 		{
-			name:    "empty entries skipped",
-			input:   "key=value&&other=data",
+			name:     "empty entries skipped",
+			input:    "key=value&&other=data",
 			expected: map[string]string{"key": "value", "other": "data"},
 		},
 	}
@@ -338,6 +342,9 @@ func TestExecuteRequest_Timeout(t *testing.T) {
 	if result.Error == "" {
 		t.Errorf("expected error message for timeout")
 	}
+	if result.ErrorKind != ErrorKindTimeout {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, ErrorKindTimeout)
+	}
 }
 
 func TestExecuteRequest_ContextCancelled(t *testing.T) {
@@ -358,6 +365,9 @@ func TestExecuteRequest_ContextCancelled(t *testing.T) {
 	}
 	if result.Error == "" {
 		t.Errorf("expected error message for cancelled context")
+	}
+	if result.ErrorKind != ErrorKindCancellation {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, ErrorKindCancellation)
 	}
 }
 
@@ -554,26 +564,6 @@ func TestExecuteRequest_ExpectBodyMatch(t *testing.T) {
 	}
 }
 
-func TestExecuteRequest_ExpectBodyTruncationWarning(t *testing.T) {
-	// Server returns exactly maxResponseDrain bytes, simulating a truncated response
-	largeBody := strings.Repeat("a", maxResponseDrain)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(largeBody))
-	}))
-	defer server.Close()
-
-	client := server.Client()
-	result := ExecuteRequest(context.Background(), client, "GET", server.URL, nil, nil, "", 0, "not-in-body")
-
-	if result.OK {
-		t.Error("expected OK=false when body doesn't match")
-	}
-	if !strings.Contains(result.Error, "truncated") {
-		t.Errorf("expected truncation warning in error, got: %s", result.Error)
-	}
-}
-
 func TestExecuteRequest_ResponseSize(t *testing.T) {
 	body := strings.Repeat("x", 1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -587,5 +577,311 @@ func TestExecuteRequest_ResponseSize(t *testing.T) {
 
 	if result.ResponseSize != 1024 {
 		t.Errorf("ResponseSize = %d, want 1024", result.ResponseSize)
+	}
+}
+
+func TestPrepareBodyWithHeaders_ContentTypePrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		explicit string
+		headers  map[string]string
+		want     string
+	}{
+		{
+			name:     "explicit overrides parsed header",
+			explicit: "application/vnd.api+json",
+			headers:  map[string]string{"Content-Type": "text/csv"},
+			want:     "application/vnd.api+json",
+		},
+		{
+			name:    "parsed header overrides inference",
+			headers: map[string]string{"content-type": "text/csv"},
+			want:    "text/csv",
+		},
+		{
+			name: "body type is inferred",
+			want: "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, contentType, err := PrepareBodyWithHeaders(
+				`{"key":"value"}`, "", nil, "", "", tt.explicit, tt.headers,
+			)
+			if err != nil {
+				t.Fatalf("PrepareBodyWithHeaders() error = %v", err)
+			}
+			if contentType != tt.want {
+				t.Errorf("content type = %q, want %q", contentType, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecuteRequestWithMatcher_MatchesAcrossReadBoundaries(t *testing.T) {
+	matcher := PrepareBodyMatcher("needle")
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return testResponse(&chunkedReadCloser{chunks: [][]byte{
+			[]byte("prefix-nee"),
+			[]byte("dle-suffix"),
+		}}), nil
+	})}
+
+	result := ExecuteRequestWithMatcher(
+		context.Background(), client, "GET", "http://example.test", nil, nil, "", 0, matcher,
+	)
+
+	if !result.OK {
+		t.Fatalf("expected cross-boundary match, got error: %s", result.Error)
+	}
+	if result.ResponseSize != int64(len("prefix-needle-suffix")) {
+		t.Errorf("ResponseSize = %d, want %d", result.ResponseSize, len("prefix-needle-suffix"))
+	}
+}
+
+func TestExecuteRequestWithMatcher_ConcurrentMatcherReuse(t *testing.T) {
+	matcher := PrepareBodyMatcher("needle")
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return testResponse(&chunkedReadCloser{chunks: [][]byte{
+			[]byte("prefix-nee"),
+			[]byte("dle-suffix"),
+		}}), nil
+	})}
+
+	const workers = 32
+	var waitGroup sync.WaitGroup
+	errors := make(chan string, workers)
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			result := ExecuteRequestWithMatcher(
+				context.Background(), client, "GET", "http://example.test", nil, nil, "", 0, matcher,
+			)
+			if !result.OK {
+				errors <- result.Error
+			}
+		}()
+	}
+	waitGroup.Wait()
+	close(errors)
+	for err := range errors {
+		t.Errorf("concurrent request failed: %s", err)
+	}
+}
+
+func TestExecuteRequestWithMatcher_DrainsFiveMiBAndReusesConnection(t *testing.T) {
+	const responseSize = 5 << 20
+	remoteAddresses := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteAddresses <- r.RemoteAddr
+		chunk := strings.Repeat("x", 32<<10)
+		for written := 0; written < responseSize; written += len(chunk) {
+			if _, err := io.WriteString(w, chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := server.Client()
+	matcher := PrepareBodyMatcher("xxx")
+	first := ExecuteRequestWithMatcher(
+		context.Background(), client, "GET", server.URL, nil, nil, "", 0, matcher,
+	)
+	second := ExecuteRequestWithMatcher(
+		context.Background(), client, "GET", server.URL, nil, nil, "", 0, matcher,
+	)
+
+	for i, result := range []Result{first, second} {
+		if !result.OK {
+			t.Fatalf("request %d failed: %s", i+1, result.Error)
+		}
+		if result.ResponseSize != responseSize {
+			t.Errorf("request %d ResponseSize = %d, want %d", i+1, result.ResponseSize, responseSize)
+		}
+	}
+	firstAddress := <-remoteAddresses
+	secondAddress := <-remoteAddresses
+	if firstAddress != secondAddress {
+		t.Errorf("connection was not reused: first=%q second=%q", firstAddress, secondAddress)
+	}
+}
+
+func TestExecuteRequest_TimingIncludesDelayedBody(t *testing.T) {
+	const bodyDelay = 80 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		time.Sleep(bodyDelay)
+		_, _ = io.WriteString(w, "done")
+	}))
+	defer server.Close()
+
+	startedAt := time.Now()
+	result := ExecuteRequest(context.Background(), server.Client(), "GET", server.URL, nil, nil, "", 0, "")
+	finishedAt := time.Now()
+
+	if !result.OK {
+		t.Fatalf("request failed: %s", result.Error)
+	}
+	if result.TTFB <= 0 {
+		t.Errorf("TTFB = %f, want > 0", result.TTFB)
+	}
+	if result.Elapsed-result.TTFB < (bodyDelay / 2).Seconds() {
+		t.Errorf("elapsed=%f TTFB=%f, expected delayed body to affect total", result.Elapsed, result.TTFB)
+	}
+	if result.CompletedAt.Before(startedAt) || result.CompletedAt.After(finishedAt) {
+		t.Errorf("CompletedAt = %v, want within [%v, %v]", result.CompletedAt, startedAt, finishedAt)
+	}
+}
+
+func TestExecuteRequest_TruncatedBodyRetainsPartialResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "20")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "partial")
+	}))
+	defer server.Close()
+
+	result := ExecuteRequest(context.Background(), server.Client(), "GET", server.URL, nil, nil, "", 0, "")
+
+	if result.OK {
+		t.Fatal("expected truncated body to fail")
+	}
+	if result.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode = %d, want %d", result.StatusCode, http.StatusOK)
+	}
+	if result.ResponseSize != int64(len("partial")) {
+		t.Errorf("ResponseSize = %d, want %d", result.ResponseSize, len("partial"))
+	}
+	if result.ErrorKind != ErrorKindBodyRead {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, ErrorKindBodyRead)
+	}
+}
+
+func TestExecuteRequest_BodyCloseError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return testResponse(&readCloserWithError{
+			Reader:   strings.NewReader("partial"),
+			closeErr: closeErr,
+		}), nil
+	})}
+
+	result := ExecuteRequest(context.Background(), client, "GET", "http://example.test", nil, nil, "", 0, "")
+
+	if result.OK {
+		t.Fatal("expected close error to fail")
+	}
+	if result.StatusCode != http.StatusOK || result.ResponseSize != int64(len("partial")) {
+		t.Errorf("partial result = status %d, size %d", result.StatusCode, result.ResponseSize)
+	}
+	if result.ErrorKind != ErrorKindBodyClose {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, ErrorKindBodyClose)
+	}
+}
+
+func TestExecuteRequest_BodyReadErrorTakesPrecedenceOverCloseError(t *testing.T) {
+	readErr := errors.New("read failed")
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return testResponse(&chunkedReadCloser{
+			chunks:   [][]byte{[]byte("partial")},
+			readErr:  readErr,
+			closeErr: errors.New("close failed"),
+		}), nil
+	})}
+
+	result := ExecuteRequest(context.Background(), client, "GET", "http://example.test", nil, nil, "", 0, "")
+
+	if result.ErrorKind != ErrorKindBodyRead {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, ErrorKindBodyRead)
+	}
+	if result.Error != readErr.Error() {
+		t.Errorf("Error = %q, want %q", result.Error, readErr)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type chunkedReadCloser struct {
+	chunks   [][]byte
+	readErr  error
+	closeErr error
+}
+
+func (r *chunkedReadCloser) Read(p []byte) (int, error) {
+	if len(r.chunks) > 0 {
+		chunk := r.chunks[0]
+		r.chunks = r.chunks[1:]
+		return copy(p, chunk), nil
+	}
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return 0, io.EOF
+}
+
+func (r *chunkedReadCloser) Close() error {
+	return r.closeErr
+}
+
+type readCloserWithError struct {
+	io.Reader
+	closeErr error
+}
+
+func (r *readCloserWithError) Close() error {
+	return r.closeErr
+}
+
+func testResponse(body io.ReadCloser) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     fmt.Sprintf("%d %s", http.StatusOK, http.StatusText(http.StatusOK)),
+		Header:     make(http.Header),
+		Body:       body,
+	}
+}
+
+func TestResponseBodyStreamingAllocations(t *testing.T) {
+	payload := bytes.Repeat([]byte("0123456789abcdef"), 64<<10)
+	reader := bytes.NewReader(nil)
+	matcher := PrepareBodyMatcher("89abcdef0123")
+	allocations := testing.AllocsPerRun(100, func() {
+		reader.Reset(payload)
+		state := matcher.newState()
+		var size int64
+		if err := observeResponseBody(reader, &size, &state); err != nil {
+			panic(err)
+		}
+		if size != int64(len(payload)) || !state.found {
+			panic("streaming observer invariant failed")
+		}
+	})
+	if allocations > 1 {
+		t.Fatalf("streaming allocations = %.2f, want <= 1", allocations)
+	}
+}
+
+func BenchmarkResponseBodyStreaming(b *testing.B) {
+	payload := bytes.Repeat([]byte("0123456789abcdef"), 64<<10)
+	reader := bytes.NewReader(nil)
+	matcher := PrepareBodyMatcher("89abcdef0123")
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		reader.Reset(payload)
+		state := matcher.newState()
+		var size int64
+		if err := observeResponseBody(reader, &size, &state); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

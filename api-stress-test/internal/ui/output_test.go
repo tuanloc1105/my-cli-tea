@@ -2,7 +2,10 @@ package ui
 
 import (
 	"bytes"
-	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,76 +14,52 @@ import (
 
 func TestPrintHeader(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := HeaderConfig{
+	err := PrintHeader(&buf, HeaderConfig{
 		URL:           "http://example.com",
 		Method:        "GET",
 		TotalRequests: 100,
 		Concurrency:   10,
-		TimeoutSec:    5.0,
-	}
-	PrintHeader(&buf, cfg)
-	out := buf.String()
-
-	if !strings.Contains(out, "http://example.com") {
-		t.Error("expected URL in header")
-	}
-	if !strings.Contains(out, "GET") {
-		t.Error("expected method in header")
-	}
-	if !strings.Contains(out, "10") {
-		t.Error("expected concurrency in header")
-	}
-}
-
-func TestPrintHeader_RateShown(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := HeaderConfig{
-		URL:           "http://example.com",
-		Method:        "GET",
-		TotalRequests: 100,
-		Concurrency:   10,
-		TimeoutSec:    5.0,
+		TimeoutSec:    5,
 		Rate:          50,
+	})
+	if err != nil {
+		t.Fatalf("PrintHeader: %v", err)
 	}
-	PrintHeader(&buf, cfg)
-	out := buf.String()
-
-	if !strings.Contains(out, "50") {
-		t.Error("expected rate in header")
-	}
-	if !strings.Contains(out, "Rate limit") {
-		t.Error("expected 'Rate limit' label in header")
+	for _, want := range []string{"http://example.com", "GET", "Total requests", "Concurrency", "Rate limit"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("header missing %q", want)
+		}
 	}
 }
 
-func TestPrintHeader_DurationMode(t *testing.T) {
+func TestPrintHeaderDurationMode(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := HeaderConfig{
+	err := PrintHeader(&buf, HeaderConfig{
 		URL:            "http://example.com",
 		Method:         "GET",
 		Concurrency:    10,
-		TimeoutSec:     5.0,
+		TimeoutSec:     5,
 		IsDurationMode: true,
 		Duration:       "30s",
+	})
+	if err != nil {
+		t.Fatalf("PrintHeader: %v", err)
 	}
-	PrintHeader(&buf, cfg)
-	out := buf.String()
-
-	if !strings.Contains(out, "30s") {
-		t.Error("expected duration in header")
-	}
-	if strings.Contains(out, "Total requests") {
-		t.Error("should not show total requests in duration mode")
+	if !strings.Contains(buf.String(), "30s") || strings.Contains(buf.String(), "Total requests") {
+		t.Errorf("unexpected duration header:\n%s", buf.String())
 	}
 }
 
-func TestPrintTextResult(t *testing.T) {
+func TestPrintTextResultUsesExplicitMetricLabels(t *testing.T) {
 	stat := stats.Statistics{
 		Successes:          90,
 		Failures:           10,
-		Total:              100,
-		SuccessRate:        90.0,
+		Completed:          100,
+		Cancelled:          2,
+		Total:              102,
+		SuccessRate:        90,
 		StatusCount:        map[int]int{200: 90, 500: 10},
+		LatencySamples:     102,
 		MinLatency:         0.01,
 		MaxLatency:         0.5,
 		AvgLatency:         0.1,
@@ -88,135 +67,212 @@ func TestPrintTextResult(t *testing.T) {
 		P90Latency:         0.2,
 		P95Latency:         0.3,
 		P99Latency:         0.45,
+		TTFBSamples:        100,
+		MinTTFB:            0.005,
+		MaxTTFB:            0.1,
+		AvgTTFB:            0.02,
+		P50TTFB:            0.015,
+		P90TTFB:            0.03,
+		P95TTFB:            0.04,
+		P99TTFB:            0.08,
 		TotalResponseBytes: 1024 * 100,
 		AvgResponseBytes:   1024,
+		Histogram: []stats.HistogramBucket{
+			{MinSec: 0.01, MaxSec: 0.1, Count: 100},
+		},
+		HistogramSampling: stats.SamplingMetadata{SampleCount: 100, Population: 102, IsSampled: true},
 	}
 
 	var buf bytes.Buffer
-	PrintTextResult(&buf, stat, 10.0, 10.0)
-	out := buf.String()
-
-	expected := []string{
-		"Stress test finished",
-		"Successes",
-		"Failures",
-		"Success rate",
-		"90.0%",
-		"p50",
-		"p90",
-		"p95",
-		"p99",
-		"Data transferred",
+	if err := PrintTextResult(&buf, stat, 10, 10); err != nil {
+		t.Fatalf("PrintTextResult: %v", err)
 	}
-	for _, s := range expected {
-		if !strings.Contains(out, s) {
-			t.Errorf("expected %q in output", s)
+	for _, want := range []string{
+		"Stress test finished",
+		"Completed",
+		"Cancelled",
+		"Total latency (seconds)",
+		"TTFB (seconds)",
+		"Decoded response body data",
+		"Avg decoded response body",
+		"Sampled 100 of 102 attempts",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("text output missing %q:\n%s", want, buf.String())
 		}
 	}
 }
 
-func TestPrintJSONResult(t *testing.T) {
+func TestPrintJSONResultGoldenV2(t *testing.T) {
 	output := JSONOutput{
+		SchemaVersion: JSONSchemaVersion,
 		Config: TestConfig{
 			URL:         "http://example.com",
 			Method:      "GET",
-			Requests:    100,
-			Concurrency: 10,
-			Timeout:     5.0,
+			Requests:    2,
+			Concurrency: 1,
+			Timeout:     5,
+		},
+		EffectiveConfig: EffectiveConfig{
+			URL:           "http://example.com",
+			Method:        "GET",
+			Requests:      2,
+			Concurrency:   1,
+			Timeout:       5,
+			Warmup:        "1s",
+			ShutdownGrace: "5s",
+			ExpectStatus:  200,
+			ExpectBody:    true,
+		},
+		Warmup: WarmupSummary{
+			DurationSeconds: 1,
+			Successes:       1,
+			Total:           1,
 		},
 		Statistics: stats.Statistics{
-			Successes:   100,
-			Total:       100,
-			SuccessRate: 100.0,
-			StatusCount: map[int]int{200: 100},
+			Successes:      1,
+			Failures:       0,
+			Completed:      1,
+			Cancelled:      1,
+			Total:          2,
+			SuccessRate:    100,
+			StatusCount:    map[int]int{200: 1},
+			LatencySamples: 2,
+			MinLatency:     0.1,
+			MaxLatency:     0.3,
+			AvgLatency:     0.2,
+			P50Latency:     0.2,
+			P90Latency:     0.28,
+			P95Latency:     0.29,
+			P99Latency:     0.298,
+			TTFBSamples:    1,
+			MinTTFB:        0.02,
+			MaxTTFB:        0.02,
+			AvgTTFB:        0.02,
+			P50TTFB:        0.02,
+			P90TTFB:        0.02,
+			P95TTFB:        0.02,
+			P99TTFB:        0.02,
+			Histogram: []stats.HistogramBucket{
+				{MinSec: 0.1, MaxSec: 0.3, Count: 2},
+			},
+			HistogramSampling: stats.SamplingMetadata{SampleCount: 2, Population: 2},
+			Throughput: []stats.ThroughputEntry{
+				{Second: 1, Requests: 2},
+			},
+			AvgResponseBytes:   5,
+			TotalResponseBytes: 10,
 		},
-		TotalTime: 1.0,
-		ReqPerSec: 100.0,
+		TotalTime:         0.5,
+		DrainTime:         0.1,
+		ReqPerSec:         4,
+		TerminationReason: "duration_complete",
 	}
 
 	var buf bytes.Buffer
-	err := PrintJSONResult(&buf, output)
+	if err := PrintJSONResult(&buf, output); err != nil {
+		t.Fatalf("PrintJSONResult: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "output_v2.golden.json"))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("read golden: %v", err)
 	}
-
-	var decoded JSONOutput
-	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if decoded.Statistics.Total != 100 {
-		t.Errorf("total = %d, want 100", decoded.Statistics.Total)
-	}
-	if decoded.ReqPerSec != 100.0 {
-		t.Errorf("req/s = %f, want 100.0", decoded.ReqPerSec)
+	if !bytes.Equal(buf.Bytes(), want) {
+		t.Errorf("JSON output differs from golden\ngot:\n%s\nwant:\n%s", buf.Bytes(), want)
 	}
 }
 
-func TestColorWriterDisabled(t *testing.T) {
+func TestPrintJSONResultDefaultsSchemaVersion(t *testing.T) {
 	var buf bytes.Buffer
-	cw := newColorWriter(&buf)
-	if cw.enabled {
-		t.Error("colorWriter should be disabled for bytes.Buffer")
+	if err := PrintJSONResult(&buf, JSONOutput{}); err != nil {
+		t.Fatalf("PrintJSONResult: %v", err)
 	}
-	result := cw.colorize(colorRed, "test")
-	if result != "test" {
-		t.Errorf("expected plain 'test', got %q", result)
+	if !strings.Contains(buf.String(), `"schema_version": 2`) {
+		t.Errorf("missing schema v2 marker: %s", buf.String())
 	}
 }
 
-func TestColorWriterNO_COLOR(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	var buf bytes.Buffer
-	cw := newColorWriter(&buf)
-	if cw.enabled {
-		t.Error("colorWriter should be disabled when NO_COLOR is set")
+var errWriterFailed = errors.New("writer failed")
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errWriterFailed }
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) / 2, nil }
+
+func TestRenderersPropagateWriterErrors(t *testing.T) {
+	stat := stats.Statistics{
+		Histogram:  []stats.HistogramBucket{{MinSec: 0, MaxSec: 1, Count: 1}},
+		Throughput: []stats.ThroughputEntry{{Second: 1, Requests: 1}, {Second: 2, Requests: 1}, {Second: 3, Requests: 1}},
 	}
-	result := cw.colorize(colorRed, "test")
-	if result != "test" {
-		t.Errorf("expected plain 'test', got %q", result)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"header", func() error { return PrintHeader(failingWriter{}, HeaderConfig{}) }},
+		{"text", func() error { return PrintTextResult(failingWriter{}, stat, 1, 1) }},
+		{"JSON", func() error { return PrintJSONResult(failingWriter{}, JSONOutput{}) }},
+		{"latency series", func() error {
+			return printLatencySeries(failingWriter{}, newColorWriter(io.Discard), "latency", 1, 0, 0, 0, 0, 0, 0, 0)
+		}},
+		{"histogram", func() error {
+			return printHistogram(&colorWriter{w: failingWriter{}}, stat.Histogram)
+		}},
+		{"throughput", func() error {
+			return printThroughputTimeline(&colorWriter{w: failingWriter{}}, stat.Throughput)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); !errors.Is(err, errWriterFailed) {
+				t.Fatalf("error = %v, want %v", err, errWriterFailed)
+			}
+		})
 	}
 }
 
-func TestColorWriterFORCE_COLOR(t *testing.T) {
-	t.Setenv("FORCE_COLOR", "1")
-	var buf bytes.Buffer
-	cw := newColorWriter(&buf)
-	if !cw.enabled {
-		t.Error("colorWriter should be enabled when FORCE_COLOR is set")
-	}
-	result := cw.colorize(colorRed, "test")
-	if !strings.Contains(result, "\033[31m") {
-		t.Errorf("expected ANSI red in output, got %q", result)
+func TestPrintJSONResultRejectsShortWrite(t *testing.T) {
+	if err := PrintJSONResult(shortWriter{}, JSONOutput{}); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("error = %v, want %v", err, io.ErrShortWrite)
 	}
 }
 
-func TestColorWriterNO_COLOR_TakesPrecedence(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("FORCE_COLOR", "1")
-	var buf bytes.Buffer
-	cw := newColorWriter(&buf)
-	if cw.enabled {
-		t.Error("NO_COLOR should take precedence over FORCE_COLOR")
-	}
+func TestColorWriterEnvironment(t *testing.T) {
+	t.Run("plain buffer", func(t *testing.T) {
+		cw := newColorWriter(&bytes.Buffer{})
+		if cw.enabled || cw.colorize(colorRed, "test") != "test" {
+			t.Error("buffer should not enable color")
+		}
+	})
+	t.Run("force color", func(t *testing.T) {
+		t.Setenv("FORCE_COLOR", "1")
+		cw := newColorWriter(&bytes.Buffer{})
+		if !cw.enabled || !strings.Contains(cw.colorize(colorRed, "test"), "\033[31m") {
+			t.Error("FORCE_COLOR should enable color")
+		}
+	})
+	t.Run("no color wins", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "")
+		t.Setenv("FORCE_COLOR", "1")
+		if newColorWriter(&bytes.Buffer{}).enabled {
+			t.Error("NO_COLOR should take precedence")
+		}
+	})
 }
 
 func TestRenderBar(t *testing.T) {
-	tests := []struct {
-		name string
-		pct  float64
-		want string
+	for _, tt := range []struct {
+		percent float64
+		want    string
 	}{
-		{"0%", 0, "[                    ]"},
-		{"50%", 50, "[==========          ]"},
-		{"100%", 100, "[====================]"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := renderBar(tt.pct, 20)
-			if got != tt.want {
-				t.Errorf("renderBar(%f, 20) = %q, want %q", tt.pct, got, tt.want)
-			}
-		})
+		{0, "[                    ]"},
+		{50, "[==========          ]"},
+		{100, "[====================]"},
+	} {
+		if got := renderBar(tt.percent, 20); got != tt.want {
+			t.Errorf("renderBar(%f) = %q, want %q", tt.percent, got, tt.want)
+		}
 	}
 }
