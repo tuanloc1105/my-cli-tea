@@ -14,6 +14,7 @@ import (
 // FinderOptions holds all configuration for FileFinder
 type FinderOptions struct {
 	CaseSensitive   bool
+	PruneMatches    bool
 	MaxWorkers      int
 	ExcludeDirs     []string
 	ExcludePatterns []string
@@ -27,6 +28,7 @@ type FinderOptions struct {
 // FileFinder handles file and directory searching
 type FileFinder struct {
 	basePath        string
+	pruneMatches    bool
 	maxWorkers      int
 	excludeDirs     map[string]bool
 	excludePatterns []*regexp.Regexp
@@ -101,6 +103,7 @@ func NewFileFinder(basePath, pattern string, opts FinderOptions) (*FileFinder, e
 
 	return &FileFinder{
 		basePath:        filepath.Clean(basePath),
+		pruneMatches:    opts.PruneMatches,
 		maxWorkers:      opts.MaxWorkers,
 		excludeDirs:     excludeDirs,
 		excludePatterns: excludePatterns,

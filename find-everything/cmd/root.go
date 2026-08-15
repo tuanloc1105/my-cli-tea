@@ -40,6 +40,7 @@ func (e exitCodeError) Error() string {
 
 type commandOptions struct {
 	caseSensitive      bool
+	pruneMatches       bool
 	maxWorkers         int
 	excludeDirs        []string
 	excludePatterns    []string
@@ -227,6 +228,7 @@ support for glob patterns, size filtering, file type filtering, and exclusion ru
 
 			finderOptions := finder.FinderOptions{
 				CaseSensitive:   options.caseSensitive,
+				PruneMatches:    options.pruneMatches,
 				MaxWorkers:      options.maxWorkers,
 				ExcludeDirs:     processedExcludeDirs,
 				ExcludePatterns: options.excludePatterns,
@@ -274,6 +276,7 @@ support for glob patterns, size filtering, file type filtering, and exclusion ru
 
 	flags := root.Flags()
 	flags.BoolVarP(&options.caseSensitive, "case-sensitive", "c", false, "Case sensitive search")
+	flags.BoolVar(&options.pruneMatches, "prune-matches", false, "Do not search inside matching directories")
 	flags.IntVarP(&options.maxWorkers, "max-workers", "w", runtime.NumCPU(), "Maximum number of worker goroutines")
 	flags.StringSliceVarP(&options.excludeDirs, "exclude-dirs", "e", []string{}, "Directories to exclude from search")
 	flags.StringSliceVarP(&options.excludePatterns, "exclude-patterns", "p", []string{}, "Patterns to exclude (regex)")

@@ -46,6 +46,7 @@ func TestCommandForwardsFlagsAndOutputOptions(t *testing.T) {
 	ctx := context.WithValue(context.Background(), testContextKey{}, "value")
 	code, stdout, stderr := runCommand(t, ctx, []string{
 		"--case-sensitive",
+		"--prune-matches",
 		"--max-workers", "3",
 		"--exclude-dirs", "node_modules,.git",
 		"--exclude-patterns", "tmp$,cache$",
@@ -69,7 +70,7 @@ func TestCommandForwardsFlagsAndOutputOptions(t *testing.T) {
 	if receivedBasePath != "/tmp/base" || receivedPattern != "*.go" {
 		t.Fatalf("base/pattern = %q/%q", receivedBasePath, receivedPattern)
 	}
-	if !receivedFinderOptions.CaseSensitive || receivedFinderOptions.MaxWorkers != 3 {
+	if !receivedFinderOptions.CaseSensitive || !receivedFinderOptions.PruneMatches || receivedFinderOptions.MaxWorkers != 3 {
 		t.Fatalf("finder booleans/workers = %+v", receivedFinderOptions)
 	}
 	if receivedFinderOptions.Progress != nil {
@@ -106,7 +107,7 @@ func TestCommandDefaultsAndStateIsolation(t *testing.T) {
 	}
 
 	code, _, stderr := runCommand(t, context.Background(), []string{
-		"--case-sensitive", "--max-workers", "2", "--no-progress", ".", "*",
+		"--case-sensitive", "--prune-matches", "--max-workers", "2", "--no-progress", ".", "*",
 	}, run, noOpHeader, noOpPrinter, alwaysTTY)
 	if code != 0 || stderr != "" {
 		t.Fatalf("first exit/stderr = %d/%q", code, stderr)
@@ -119,10 +120,10 @@ func TestCommandDefaultsAndStateIsolation(t *testing.T) {
 	if len(received) != 2 {
 		t.Fatalf("runner calls = %d, want 2", len(received))
 	}
-	if !received[0].CaseSensitive || received[0].MaxWorkers != 2 || received[0].Progress != nil {
+	if !received[0].CaseSensitive || !received[0].PruneMatches || received[0].MaxWorkers != 2 || received[0].Progress != nil {
 		t.Fatalf("first options = %+v", received[0])
 	}
-	if received[1].CaseSensitive || received[1].MaxWorkers != runtime.NumCPU() || received[1].Progress == nil {
+	if received[1].CaseSensitive || received[1].PruneMatches || received[1].MaxWorkers != runtime.NumCPU() || received[1].Progress == nil {
 		t.Fatalf("second options leaked state = %+v", received[1])
 	}
 	if received[1].MinSize != 0 || received[1].MaxSize != 1<<63-1 || received[1].MaxResults != 10000 {
