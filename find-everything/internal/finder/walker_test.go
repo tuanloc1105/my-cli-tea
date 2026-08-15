@@ -415,6 +415,87 @@ func TestPatternMatchesBasenameOnly(t *testing.T) {
 	}
 }
 
+func TestPruneMatchesTraversal(t *testing.T) {
+	base := t.TempDir()
+	outer := filepath.Join(base, "node_modules")
+	nested := filepath.Join(outer, "pkg", "node_modules")
+	sibling := filepath.Join(base, "apps", "example", "node_modules")
+	for _, path := range []string{nested, sibling} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+	}
+
+	defaultResults := runTestFinder(t, base, "node_modules", testFinderOptions())
+	assertDirectoryPaths(t, defaultResults.Directories, outer, nested, sibling)
+
+	opts := testFinderOptions()
+	opts.PruneMatches = true
+	prunedResults := runTestFinder(t, base, "node_modules", opts)
+	assertDirectoryPaths(t, prunedResults.Directories, outer, sibling)
+}
+
+func TestPruneMatchesUsesExistingMatcherSemantics(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "Node_Modules")
+	child := filepath.Join(parent, "node_nested")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+
+	opts := testFinderOptions()
+	opts.PruneMatches = true
+	results := runTestFinder(t, base, "node_*", opts)
+	assertDirectoryPaths(t, results.Directories, parent)
+
+	opts.CaseSensitive = true
+	results = runTestFinder(t, base, "node_*", opts)
+	assertDirectoryPaths(t, results.Directories, child)
+}
+
+func TestPruneMatchesPreservesExclusionPrecedence(t *testing.T) {
+	base := t.TempDir()
+	excluded := filepath.Join(base, "node_modules")
+	if err := os.MkdirAll(filepath.Join(excluded, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+
+	opts := testFinderOptions()
+	opts.PruneMatches = true
+	opts.ExcludeDirs = []string{"node_modules"}
+	results := runTestFinder(t, base, "node_modules", opts)
+	assertDirectoryPaths(t, results.Directories)
+}
+
+func TestPruneMatchesProgressOmitsPrunedDirectoryTasks(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "matched", "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	writeTestFile(t, filepath.Join(base, "matched-file"), 1)
+
+	var mu sync.Mutex
+	var snapshots []types.ProgressSnapshot
+	opts := testFinderOptions()
+	opts.PruneMatches = true
+	opts.Progress = func(snapshot types.ProgressSnapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		snapshots = append(snapshots, snapshot)
+	}
+	results := runTestFinder(t, base, "*", opts)
+	if got := len(results.Files) + len(results.Directories); got != 2 {
+		t.Fatalf("results = %d, want 2", got)
+	}
+
+	mu.Lock()
+	final := snapshots[len(snapshots)-1]
+	mu.Unlock()
+	if final.TotalDirectories != 1 || final.ProcessedDirectories != 1 || final.FoundFiles != 1 || final.FoundDirectories != 1 {
+		t.Fatalf("final snapshot = %+v", final)
+	}
+}
+
 func TestSymlinkPolicy(t *testing.T) {
 	base := t.TempDir()
 	targetFile := filepath.Join(base, "target.bin")
@@ -578,6 +659,15 @@ func assertPathNames(t *testing.T, files []types.FileResult, want ...string) {
 	sort.Strings(want)
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("file names = %v, want %v", got, want)
+	}
+}
+
+func assertDirectoryPaths(t *testing.T, got []string, want ...string) {
+	t.Helper()
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("directory paths = %v, want %v", got, want)
 	}
 }
 

@@ -327,7 +327,8 @@ func (ff *FileFinder) processDirectory(
 			continue
 		}
 
-		if ff.MatchesPattern(entryName) {
+		matches := ff.MatchesPattern(entryName)
+		if matches {
 			if isDirectory {
 				collector.addDirectory(fullPath)
 			} else {
@@ -335,7 +336,7 @@ func (ff *FileFinder) processDirectory(
 			}
 		}
 
-		if isDirectory && ctx.Err() == nil {
+		if isDirectory && (!matches || !ff.pruneMatches) && ctx.Err() == nil {
 			children = append(children, directoryTask{path: fullPath})
 		}
 	}
