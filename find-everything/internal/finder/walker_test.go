@@ -489,6 +489,10 @@ func TestPruneMatchesProgressOmitsPrunedDirectoryTasks(t *testing.T) {
 	}
 
 	mu.Lock()
+	if len(snapshots) == 0 {
+		mu.Unlock()
+		t.Fatal("progress snapshots = 0, want final snapshot")
+	}
 	final := snapshots[len(snapshots)-1]
 	mu.Unlock()
 	if final.TotalDirectories != 1 || final.ProcessedDirectories != 1 || final.FoundFiles != 1 || final.FoundDirectories != 1 {
@@ -664,6 +668,8 @@ func assertPathNames(t *testing.T, files []types.FileResult, want ...string) {
 
 func assertDirectoryPaths(t *testing.T, got []string, want ...string) {
 	t.Helper()
+	got = append([]string(nil), got...)
+	want = append([]string(nil), want...)
 	sort.Strings(got)
 	sort.Strings(want)
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
