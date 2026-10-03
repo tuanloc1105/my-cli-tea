@@ -19,6 +19,7 @@ type commandOptions struct {
 	noDefaultExclude bool
 	noLineNumbers    bool
 	noFilePath       bool
+	noContent        bool
 	maxResults       int
 	maxWorkers       int
 	maxLineSize      int64
@@ -38,6 +39,9 @@ func defaultCommandOptions() commandOptions {
 }
 
 func validateOptions(options commandOptions) error {
+	if options.noContent && options.noFilePath && options.noLineNumbers {
+		return fmt.Errorf("--no-content, --no-file-path, and --no-line-numbers cannot all be enabled")
+	}
 	if options.maxResults < 0 {
 		return fmt.Errorf("--max-results must not be negative")
 	}
@@ -62,7 +66,7 @@ func validateModeFlags(command *cobra.Command, options commandOptions) error {
 			"regex", "case-sensitive", "multiline", "extensions", "exclude-dirs",
 			"exclude-files", "no-default-excludes", "no-line-numbers", "no-file-path",
 			"max-results", "max-workers", "max-line-size", "max-multiline-size", "all",
-			"suppress-warnings",
+			"suppress-warnings", "no-content",
 		}
 		for _, name := range searchOnly {
 			if command.Flags().Changed(name) {

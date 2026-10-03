@@ -13,6 +13,7 @@ type renderer struct {
 	stderr           io.Writer
 	showLineNumbers  bool
 	showFilePath     bool
+	showContent      bool
 	multiline        bool
 	suppressWarnings bool
 }
@@ -33,7 +34,11 @@ func (r renderer) handle(event searcher.Event) error {
 
 	result := event.Result
 	if r.showFilePath {
-		if _, err := io.WriteString(r.stdout, result.Path+":"); err != nil {
+		path := result.Path
+		if r.showLineNumbers || r.showContent {
+			path += ":"
+		}
+		if _, err := io.WriteString(r.stdout, path); err != nil {
 			return err
 		}
 	}
@@ -42,11 +47,18 @@ func (r renderer) handle(event searcher.Event) error {
 		if r.multiline && result.EndLine != result.Line {
 			line += ".." + strconv.Itoa(result.EndLine)
 		}
-		if _, err := io.WriteString(r.stdout, line+":"); err != nil {
+		if r.showContent {
+			line += ":"
+		}
+		if _, err := io.WriteString(r.stdout, line); err != nil {
 			return err
 		}
 	}
-	_, err := fmt.Fprintln(r.stdout, result.Content)
+	content := ""
+	if r.showContent {
+		content = result.Content
+	}
+	_, err := fmt.Fprintln(r.stdout, content)
 	return err
 }
 

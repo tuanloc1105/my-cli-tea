@@ -106,6 +106,7 @@ usage, validation, root, writer, and partial-search errors return exit code 2.`,
 	flags.BoolVar(&options.noDefaultExclude, "no-default-excludes", false, "Disable built-in directory excludes")
 	flags.BoolVar(&options.noLineNumbers, "no-line-numbers", false, "Hide line numbers in output")
 	flags.BoolVar(&options.noFilePath, "no-file-path", false, "Hide file paths in output")
+	flags.BoolVar(&options.noContent, "no-content", false, "Hide matched content in output")
 	flags.IntVarP(&options.maxResults, "max-results", "m", 0, "Maximum results to emit (0 means unlimited)")
 	flags.IntVar(&options.maxWorkers, "max-workers", options.maxWorkers, "Maximum files searched concurrently")
 	flags.Int64Var(&options.maxLineSize, "max-line-size", options.maxLineSize, "Maximum bytes in one normal-mode line")
@@ -143,6 +144,7 @@ func runSearch(
 		stderr:           stderr,
 		showLineNumbers:  !options.noLineNumbers,
 		showFilePath:     !options.noFilePath,
+		showContent:      !options.noContent,
 		multiline:        options.multiline,
 		suppressWarnings: options.suppressWarnings,
 	}

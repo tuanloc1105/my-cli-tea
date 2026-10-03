@@ -22,7 +22,7 @@ func TestCommandHelpAndFreshState(t *testing.T) {
 	}
 	for _, required := range []string{
 		"Usage:", "--no-default-excludes", "--max-workers", "--max-line-size",
-		"--max-multiline-size", "--show-hidden", "exit code 1", "exit code 2",
+		"--max-multiline-size", "--show-hidden", "--no-content", "exit code 1", "exit code 2",
 	} {
 		if !strings.Contains(stdout, required) {
 			t.Errorf("help is missing %q:\n%s", required, stdout)
@@ -34,12 +34,12 @@ func TestCommandHelpAndFreshState(t *testing.T) {
 		received = append(received, options)
 		return nil
 	}
-	firstCode, _, firstErr := runCommand(t, []string{"--regex", "--max-workers=2", "root", "word"}, run)
+	firstCode, _, firstErr := runCommand(t, []string{"--regex", "--no-content", "--max-workers=2", "root", "word"}, run)
 	secondCode, _, secondErr := runCommand(t, []string{"root", "word"}, run)
 	if firstCode != 0 || secondCode != 0 || firstErr != "" || secondErr != "" {
 		t.Fatalf("codes/stderr = %d/%d/%q/%q", firstCode, secondCode, firstErr, secondErr)
 	}
-	if len(received) != 2 || !received[0].useRegex || received[0].maxWorkers != 2 {
+	if len(received) != 2 || !received[0].useRegex || !received[0].noContent || received[0].maxWorkers != 2 {
 		t.Fatalf("received options = %+v", received)
 	}
 	defaults := defaultCommandOptions()
@@ -61,6 +61,7 @@ func TestCommandArgumentAndValidationErrorsExitTwo(t *testing.T) {
 		{name: "zero line size", args: []string{"--max-line-size=0", "root", "word"}, want: "greater than 0"},
 		{name: "zero multiline size", args: []string{"--max-multiline-size=0", "root", "word"}, want: "greater than 0"},
 		{name: "all with extensions", args: []string{"--all", "--extensions=txt", "root", "word"}, want: "cannot be used"},
+		{name: "all output fields hidden", args: []string{"--no-content", "--no-file-path", "--no-line-numbers", "root", "word"}, want: "cannot all be enabled"},
 		{name: "list search flag", args: []string{"--list", "--regex", "root"}, want: "cannot be used with --list"},
 		{name: "list suppress warnings", args: []string{"--list", "--suppress-warnings", "root"}, want: "cannot be used with --list"},
 		{name: "show hidden in search", args: []string{"--show-hidden", "root", "word"}, want: "only be used with --list"},
@@ -118,6 +119,8 @@ func TestListRejectsEverySearchOnlyFlag(t *testing.T) {
 		{"--no-default-excludes"},
 		{"--no-line-numbers"},
 		{"--no-file-path"},
+		{"--no-content"},
+		{"--no-content=false"},
 		{"--max-results=1"},
 		{"--max-workers=1"},
 		{"--max-line-size=1"},
@@ -191,6 +194,39 @@ func TestExecuteContextSearchExitCodesAndFormatting(t *testing.T) {
 	})
 }
 
+func TestExecuteContextNoContent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	writeTestFile(t, path, "first needle needle\nsecond needle\n")
+	tests := []struct {
+		name    string
+		flags   []string
+		keyword string
+		want    string
+		code    int
+	}{
+		{name: "locations", keyword: "needle", want: path + ":1\n" + path + ":2\n\nFound 2 match(es)\n"},
+		{name: "line only", flags: []string{"--no-file-path"}, keyword: "needle", want: "1\n2\n\nFound 2 match(es)\n"},
+		{name: "path only", flags: []string{"--no-line-numbers"}, keyword: "needle", want: path + "\n" + path + "\n\nFound 2 match(es)\n"},
+		{name: "range", flags: []string{"--multiline"}, keyword: `needle\nsecond`, want: path + ":1..2\n\nFound 1 match(es)\n"},
+		{name: "range only", flags: []string{"--multiline", "--no-file-path"}, keyword: `needle\nsecond`, want: "1..2\n\nFound 1 match(es)\n"},
+		{name: "multiline single line", flags: []string{"--multiline"}, keyword: "first", want: path + ":1\n\nFound 1 match(es)\n"},
+		{name: "exact cap", flags: []string{"--max-results=1"}, keyword: "needle", want: path + ":1\n\nFound 1 match(es)\n"},
+		{name: "no match", keyword: "absent", want: "No matches found\n", code: 1},
+		{name: "explicit false", flags: []string{"--no-content=false", "--no-file-path", "--no-line-numbers"}, keyword: "needle", want: "first needle needle\nsecond needle\n\nFound 2 match(es)\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"--no-content"}, test.flags...)
+			args = append(args, root, test.keyword)
+			code, stdout, stderr := runIntegration(args)
+			if code != test.code || stdout != test.want || stderr != "" {
+				t.Fatalf("exit/stdout/stderr = %d/%q/%q, want %d/%q/empty", code, stdout, stderr, test.code, test.want)
+			}
+		})
+	}
+}
+
 func TestExecuteContextHiddenListAndLegacySyntax(t *testing.T) {
 	fixture := newSearchFixture(t)
 
@@ -257,16 +293,20 @@ func TestExecuteContextPartialErrorsAndSuppression(t *testing.T) {
 func TestExecuteContextWriterAndContextErrorsExitTwo(t *testing.T) {
 	fixture := newSearchFixture(t)
 	var stderr bytes.Buffer
-	code := ExecuteContext(context.Background(), []string{fixture.root, "needle"}, failingWriter{}, &stderr)
-	if code != 2 || !strings.Contains(stderr.String(), "emit search result") {
-		t.Fatalf("writer failure = %d/%q", code, stderr.String())
+	for _, flags := range [][]string{nil, {"--no-content"}, {"--no-content", "--no-file-path"}, {"--no-content", "--no-line-numbers"}} {
+		stderr.Reset()
+		args := append(append([]string(nil), flags...), fixture.root, "needle")
+		code := ExecuteContext(context.Background(), args, failingWriter{}, &stderr)
+		if code != 2 || !strings.Contains(stderr.String(), "emit search result") {
+			t.Fatalf("flags=%v writer failure = %d/%q", flags, code, stderr.String())
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var stdout bytes.Buffer
 	stderr.Reset()
-	code = ExecuteContext(ctx, []string{fixture.root, "needle"}, &stdout, &stderr)
+	code := ExecuteContext(ctx, []string{fixture.root, "needle"}, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "context canceled") {
 		t.Fatalf("context failure = %d/%q/%q", code, stdout.String(), stderr.String())
 	}
