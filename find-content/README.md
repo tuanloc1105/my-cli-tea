@@ -23,6 +23,7 @@ Examples:
 
 ```bash
 find-content ./src "TODO"
+find-content --no-content ./src "TODO"
 find-content --regex ./src 'func\s+Run'
 find-content --extensions go,md ./src "context"
 find-content --multiline ./src 'first line\nsecond line'
@@ -59,6 +60,13 @@ find-content --list --show-hidden <directory>
 List mode hides hidden entries by default. Dot-prefixed names are hidden on every OS; Windows hidden attributes and the macOS `UF_HIDDEN` flag are also honored. The legacy two-positional-argument form remains accepted temporarily and prints a deprecation warning. Search-only flags are rejected in list mode.
 
 ## Output and exit status
+
+Search results use `file:line:content` by default. Use `--no-content` to print only
+`file:line`, or `file:start..end` for multiline ranges, without a trailing colon.
+Combine it with `--no-file-path` for line numbers only, or `--no-line-numbers`
+for paths only. Results remain one per match (paths can repeat), and the match
+summary is unchanged. Enabling all three hiding flags together is a usage error.
+`--no-content` is a search-only flag and cannot be used with `--list`.
 
 | Code | Meaning |
 | --- | --- |

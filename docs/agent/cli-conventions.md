@@ -78,6 +78,12 @@ stdout or print usage unless help was explicitly requested.
 Known product quirks listed above are compatibility requirements for this
 lifecycle work. Fix them only under a separate approved change.
 
+For `find-content`, `--no-content` hides match text while retaining `file:line`
+or multiline `file:start..end`, with no trailing colon. It composes with either
+`--no-file-path` or `--no-line-numbers`; enabling all three is a usage error.
+List mode rejects it as a search-only flag. Match counts, ordering, summaries,
+and exit codes remain unchanged; path-only output does not deduplicate files.
+
 For `find-everything` prompt tests, do not rely only on a finite
 `strings.Reader("d")`: EOF lets line-oriented scanners return a token without a
 newline and can hide an Enter-required regression. Use a reader that fails on a
